@@ -142,8 +142,24 @@ func NewClient(cfg *Config) *Client {
 }
 
 func (c *Client) setupS2Prometheus() error {
-	_, err := c.DB.Exec("CREATE TABLE metrics(timestamp JSON, metric JSON, value JSON)")
+	// _, err := c.DB.Exec("CREATE TABLE $1(timestamp JSON, metric JSON, value JSON)", c.cfg.table)
+	_, err := c.DB.Exec("CREATE TABLE $1(time INTEGER, name TEXT, value DOUBLE, labels JSON)", c.cfg.table)
 	return err
+	/*tx, err := c.DB.Begin()
+	defer tx.Rollback()
+
+	_, err = c.DB.Exec("CREATE TABLE $1_values(time INTEGER, value DOUBLE, labels_id INTEGER)", c.cfg.table)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.DB.Exec("CREATE TABLE $1_labels(id INTEGER NOT NULL AUTO_INCREMENT, metric_name TEXT, labels JSON)", c.cfg.table)
+	if err != nil {
+		return err
+	}
+
+	tx.Commit()
+	return nil*/
 }
 
 func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error {
@@ -229,6 +245,31 @@ func metricString(m model.Metric) string {
 	}
 }
 
+func metricLabelStrings(m model.Metric) (string, string) {
+	metricName, hasName := m[model.MetricNameLabel]
+	numLabels := len(m) - 1
+	if !hasName {
+		numLabels = len(m)
+	}
+	labelStrings := make([]string, 0, numLabels)
+	for label, value := range m {
+		if label != model.MetricNameLabel {
+			labelStrings = append(labelStrings, fmt.Sprintf("%s=%q", label, value))
+		}
+	}
+
+	switch numLabels {
+	case 0:
+		if hasName {
+			return string(metricName), ""
+		}
+		return "", ""
+	default:
+		sort.Strings(labelStrings)
+		return string(metricName), fmt.Sprintf("{%s}", strings.Join(labelStrings, ","))
+	}
+}
+
 // Write implements the Writer interface and writes metric samples to the database
 func (c *Client) Write(samples model.Samples) error {
 	begin := time.Now()
@@ -264,13 +305,16 @@ func (c *Client) Write(samples model.Samples) error {
 
 	for _, sample := range samples {
 		milliseconds := sample.Timestamp.UnixNano() / 1000000
-		line := fmt.Sprintf("%v %v %v", metricString(sample.Metric), sample.Value, milliseconds)
+		metricName, labels := metricLabelStrings(sample.Metric)
+		line := fmt.Sprintf("%v%v %v %v\n", metricName, labels, sample.Value, milliseconds)
 
 		if c.cfg.pgPrometheusLogSamples {
 			fmt.Println(line)
 		}
 
-		_, err = tx.Exec("INSERT INTO metrics VALUES($1)", sample)
+		// _, err = tx.Exec("INSERT INTO metrics VALUES($1)", sample)
+		// timestamp INTEGER, name TEXT, value DOUBLE, labels JSON
+		_, err = tx.Exec("INSERT INTO $1 VALUES($2, $3, $4, $5)", c.cfg.table, milliseconds, metricName, sample.Value, labels)
 		if err != nil {
 			log.Error("msg", "Error executing INSERT metrics statement", "stmt", line, "err", err)
 			return err
