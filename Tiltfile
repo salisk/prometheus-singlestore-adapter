@@ -4,13 +4,14 @@ default_registry('k3d-registry.localhost:5000')
 
 local_resource(
     'go-compile',
-    'make build'
+    'make build',
+    deps=['cmd/*', 'pkg/*']
     )
 
 docker_build_with_restart(
        'prometheus-singlestore-adapter',
        '.',
-       entrypoint=['/prometheus-postgresql-adapter'],
+       entrypoint=['/prometheus-singlestore-adapter'],
        dockerfile='Dockerfile',
        live_update=[sync('bin/', '/')]
 )

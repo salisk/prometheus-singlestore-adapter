@@ -6,15 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"prometheus-singlestore-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/util"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
-
-	"prometheus-singlestore-adapter/pkg/util"
-
-	"prometheus-singlestore-adapter/pkg/log"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus"
@@ -78,20 +76,33 @@ const (
 	sqlInsertValues   = "INSERT INTO %s_values SELECT tmp.prom_time, tmp.prom_value, l.id FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp INNER JOIN %s_labels l on tmp.prom_name=l.metric_name AND  tmp.prom_labels=l.labels;"
 )
 
-var (
-	createTmpTableStmt *sql.Stmt
-)
+var createTmpTableStmt *sql.Stmt
 
 // NewClient creates a new PostgreSQL client
 func NewClient(cfg *Config) *Client {
-	connStr := fmt.Sprintf("host=%v port=%v user=%v dbname=%v password='%v' sslmode=%v connect_timeout=10",
-		cfg.host, cfg.port, cfg.user, cfg.database, cfg.password, cfg.sslMode)
+	connParams := strings.Join([]string{
+		// convert timestame and date to time.Time
+		"parseTime=true",
+		// don't use the binary protocol
+		"interpolateParams=true",
+		// set a sane connection timeout rather than the default infinity
+		"timeout=10s",
+	}, "&")
+
+	connString := fmt.Sprintf(
+		"%s:%s@tcp(%s)/%s?%s",
+		cfg.user,
+		cfg.password,
+		fmt.Sprintf("%s:%d", cfg.host, cfg.port),
+		cfg.database,
+		connParams,
+	)
 
 	wrappedDb, err := util.RetryWithFixedDelay(uint(cfg.dbConnectRetries), time.Second, func() (interface{}, error) {
-		return sql.Open("mysql", connStr)
+		return sql.Open("mysql", connString)
 	})
 
-	log.Info("msg", regexp.MustCompile("password='(.+?)'").ReplaceAllLiteralString(connStr, "password='****'"))
+	log.Info("msg", regexp.MustCompile("password='(.+?)'").ReplaceAllLiteralString(connString, "password='****'"))
 
 	if err != nil {
 		log.Error("err", err)
@@ -141,9 +152,50 @@ func NewClient(cfg *Config) *Client {
 	return client
 }
 
+func Escape(sql string) string {
+	dest := make([]byte, 0, 2*len(sql))
+	var escape byte
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+
+		escape = 0
+
+		switch c {
+		case 0: /* Must be escaped for 'mysql' */
+			escape = '0'
+			break
+		case '\n': /* Must be escaped for logs */
+			escape = 'n'
+			break
+		case '\r':
+			escape = 'r'
+			break
+		case '\\':
+			escape = '\\'
+			break
+		case '\'':
+			escape = '\''
+			break
+		case '"': /* Better safe than sorry */
+			escape = '"'
+			break
+		case '\032': // 十进制26,八进制32,十六进制1a, /* This gives problems on Win32 */
+			escape = 'Z'
+		}
+
+		if escape != 0 {
+			dest = append(dest, '\\', escape)
+		} else {
+			dest = append(dest, c)
+		}
+	}
+
+	return string(dest)
+}
+
 func (c *Client) setupS2Prometheus() error {
 	// _, err := c.DB.Exec("CREATE TABLE $1(timestamp JSON, metric JSON, value JSON)", c.cfg.table)
-	_, err := c.DB.Exec("CREATE TABLE $1(time INTEGER, name TEXT, value DOUBLE, labels JSON)", c.cfg.table)
+	_, err := c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s(time INTEGER, name TEXT, value DOUBLE, labels JSON)", c.cfg.table))
 	return err
 	/*tx, err := c.DB.Begin()
 	defer tx.Rollback()
@@ -169,7 +221,6 @@ func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error 
 	}
 
 	tx, err := c.DB.Begin()
-
 	if err != nil {
 		return err
 	}
@@ -193,7 +244,7 @@ func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error 
 
 	if installSchema {
 		var rows *sql.Rows
-		rows, err = tx.Query("SELECT create_prometheus_table($1, normalized_tables => $2, chunk_time_interval => $3,  use_timescaledb=> $4)",
+		rows, err = tx.Query("SELECT create_prometheus_table(?, normalized_tables => ?, chunk_time_interval => ?,  use_timescaledb => ?)",
 			c.cfg.table, c.cfg.pgPrometheusNormalize, c.cfg.pgPrometheusChunkInterval.String(), c.cfg.useTimescaleDb)
 
 		if err != nil {
@@ -254,7 +305,7 @@ func metricLabelStrings(m model.Metric) (string, string) {
 	labelStrings := make([]string, 0, numLabels)
 	for label, value := range m {
 		if label != model.MetricNameLabel {
-			labelStrings = append(labelStrings, fmt.Sprintf("%s=%q", label, value))
+			labelStrings = append(labelStrings, fmt.Sprintf("%q:%q", label, value))
 		}
 	}
 
@@ -274,7 +325,6 @@ func metricLabelStrings(m model.Metric) (string, string) {
 func (c *Client) Write(samples model.Samples) error {
 	begin := time.Now()
 	tx, err := c.DB.Begin()
-
 	if err != nil {
 		log.Error("msg", "Error on Begin when writing samples", "err", err)
 		return err
@@ -314,7 +364,14 @@ func (c *Client) Write(samples model.Samples) error {
 
 		// _, err = tx.Exec("INSERT INTO metrics VALUES($1)", sample)
 		// timestamp INTEGER, name TEXT, value DOUBLE, labels JSON
-		_, err = tx.Exec("INSERT INTO $1 VALUES($2, $3, $4, $5)", c.cfg.table, milliseconds, metricName, sample.Value, labels)
+		log.Info("label_value:", labels)
+
+		fmt.Println("------QUERY-----")
+		fmt.Println(fmt.Sprintf("INSERT INTO %s VALUES(%v, %v, %v, %v)", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels)))
+		fmt.Println("----------------")
+
+		_, err = tx.Exec(fmt.Sprintf("INSERT INTO %s VALUES(%v, \"%v\", %v, \"%v\")", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels)))
+		// _, err = tx.Exec("INSERT INTO ? VALUES(?, ?, ?, ?)", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels))
 		if err != nil {
 			log.Error("msg", "Error executing INSERT metrics statement", "stmt", line, "err", err)
 			return err
@@ -422,7 +479,6 @@ func (l *sampleLabels) Scan(value interface{}) error {
 	case []uint8:
 		m := make(map[string]string)
 		err := json.Unmarshal(t, &m)
-
 		if err != nil {
 			return err
 		}
@@ -464,7 +520,6 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 
 	for _, q := range req.Queries {
 		command, err := c.buildCommand(q)
-
 		if err != nil {
 			return nil, err
 		}
@@ -472,7 +527,6 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 		log.Debug("msg", "Executed query", "query", command)
 
 		rows, err := c.DB.Query(command)
-
 		if err != nil {
 			return nil, err
 		}
@@ -487,7 +541,6 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 				time   time.Time
 			)
 			err := rows.Scan(&time, &name, &value, &labels)
-
 			if err != nil {
 				return nil, err
 			}
@@ -550,7 +603,6 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 
 // verifyPgPrometheus checks are the extensions and schema already setup.
 func (c *Client) verifyPgPrometheus() (bool, bool, error) {
-
 	installExtensions, installSchema := true, true
 
 	extCount := 1
@@ -562,7 +614,6 @@ func (c *Client) verifyPgPrometheus() (bool, bool, error) {
 	}
 
 	rows, err := c.DB.Query(fmt.Sprintf("SELECT DISTINCT(e.extname) FROM pg_catalog.pg_extension e WHERE e.extname IN (%s)", extensions))
-
 	if err != nil {
 		log.Debug("msg", "Extension check failed", "err", err)
 		return false, false, err
@@ -600,7 +651,6 @@ func (c *Client) verifyPgPrometheus() (bool, bool, error) {
 // HealthCheck implements the healtcheck interface
 func (c *Client) HealthCheck() error {
 	rows, err := c.DB.Query("SELECT 1")
-
 	if err != nil {
 		log.Debug("msg", "Health check error", "err", err)
 		return err
@@ -668,7 +718,6 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 
 	if len(labelEqualPredicates) > 0 {
 		labelsJSON, err := json.Marshal(labelEqualPredicates)
-
 		if err != nil {
 			return "", err
 		}
@@ -721,5 +770,5 @@ func (c *Client) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements prometheus.Collector.
 func (c *Client) Collect(ch chan<- prometheus.Metric) {
-	//ch <- c.ignoredSamples
+	// ch <- c.ignoredSamples
 }
