@@ -14,14 +14,14 @@ spec:
         run: prometheus-singlestore-adapter
     spec:
       containers:
-        - args: ["--pg-prometheus-log-samples=true", "--pg-port=3306", "--pg-user=admin", "--pg-database=metricsdb"]
+        - args: ["--pg-prometheus-log-samples=false", "--pg-port=3306", "--pg-user=admin", "--pg-database=metricsdb"]
           env:
             - name: TS_PROM_LOG_LEVEL
               value: "debug"
             - name: TS_PROM_PG_DB_CONNECT_RETRIES
               value: "10"
             - name: TS_PROM_PG_HOST
-              value: "svc-5c512602-aca3-4d35-880e-23dafaa3fafb-ddl.default"
+              value: "svc-ea8a47e8-3c1f-4ab0-8177-15e604a75694-ddl"
             - name: TS_PROM_PG_PASSWORD
               value: "Password!"
             - name: TS_PROM_PG_SCHEMA

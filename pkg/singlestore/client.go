@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"prometheus-singlestore-adapter/pkg/log"
 	"prometheus-singlestore-adapter/pkg/util"
@@ -70,10 +71,13 @@ type Client struct {
 }
 
 const (
-	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s_tmp(sample prom_sample) ON COMMIT DELETE ROWS;"
-	sqlCopyTable      = "COPY \"%s\" FROM STDIN"
-	sqlInsertLabels   = "INSERT INTO %s_labels (metric_name, labels) SELECT tmp.prom_name, tmp.prom_labels FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp LEFT JOIN %s_labels l ON tmp.prom_name=l.metric_name AND tmp.prom_labels=l.labels WHERE l.metric_name IS NULL ON CONFLICT (metric_name, labels) DO NOTHING;"
-	sqlInsertValues   = "INSERT INTO %s_values SELECT tmp.prom_time, tmp.prom_value, l.id FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp INNER JOIN %s_labels l on tmp.prom_name=l.metric_name AND  tmp.prom_labels=l.labels;"
+	//sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s_tmp(sample prom_sample) ON COMMIT DELETE ROWS;"
+	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s(time BIGINT, name TEXT, value DOUBLE, labels JSON)"
+	// sqlCopyTable      = "COPY \"%s\" FROM STDIN"
+	sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT name, labels FROM %s"
+	//sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT tmp.prom_name, tmp.prom_labels FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp LEFT JOIN %s_labels l ON tmp.prom_name=l.metric_name AND tmp.prom_labels=l.labels WHERE l.metric_name IS NULL ON CONFLICT (metric_name, labels) DO NOTHING;"
+	sqlInsertValues = "INSERT INTO %s_values SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
+	// sqlInsertValues = "INSERT INTO %s_values SELECT tmp.prom_time, tmp.prom_value, l.id FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp INNER JOIN %s_labels l on tmp.prom_name=l.metric_name AND  tmp.prom_labels=l.labels;"
 )
 
 var createTmpTableStmt *sql.Stmt
@@ -124,6 +128,12 @@ func NewClient(cfg *Config) *Client {
 		log.Error("err", "Error on setting prometheus for SingleStore", err)
 		os.Exit(1)
 	}
+
+	// createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
+	// if err != nil {
+	// 	log.Error("msg", "Error on preparing create tmp table statement", "err", err)
+	// 	os.Exit(1)
+	// }
 
 	// if !cfg.readOnly {
 	// 	installExtensions, installSchema, err := client.verifyPgPrometheus()
@@ -194,24 +204,48 @@ func Escape(sql string) string {
 }
 
 func (c *Client) setupS2Prometheus() error {
-	// _, err := c.DB.Exec("CREATE TABLE $1(timestamp JSON, metric JSON, value JSON)", c.cfg.table)
-	_, err := c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s(time INTEGER, name TEXT, value DOUBLE, labels JSON)", c.cfg.table))
-	return err
-	/*tx, err := c.DB.Begin()
+	tx, err := c.DB.Begin()
 	defer tx.Rollback()
 
-	_, err = c.DB.Exec("CREATE TABLE $1_values(time INTEGER, value DOUBLE, labels_id INTEGER)", c.cfg.table)
-	if err != nil {
-		return err
-	}
+	if c.cfg.pgPrometheusNormalize {
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_values(time BIGINT, value DOUBLE, labels_id INTEGER)", c.cfg.table))
+		if err != nil {
+			return err
+		}
 
-	_, err = c.DB.Exec("CREATE TABLE $1_labels(id INTEGER NOT NULL AUTO_INCREMENT, metric_name TEXT, labels JSON)", c.cfg.table)
-	if err != nil {
-		return err
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_labels(id INTEGER NOT NULL AUTO_INCREMENT, metric_name TEXT, labels JSON, primary key (id))", c.cfg.table))
+		if err != nil {
+			return err
+		}
+
+		_, err = c.DB.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s", c.cfg.table))
+		if err != nil {
+			return err
+		}
+
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE VIEW %s AS SELECT v.time, l.metric_name AS name, v.value, l.labels FROM %s_values AS v JOIN %s_labels AS l ON l.id = v.labels_id", c.cfg.table, c.cfg.table, c.cfg.table))
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_samples(time BIGINT, name TEXT, value DOUBLE, labels JSON)", c.cfg.table))
+		if err != nil {
+			return err
+		}
+
+		_, err = c.DB.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s", c.cfg.table))
+		if err != nil {
+			return err
+		}
+
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE VIEW %s AS SELECT time, name AS metric_name, value, labels FROM %s_samples", c.cfg.table, c.cfg.table))
+		if err != nil {
+			return err
+		}
 	}
 
 	tx.Commit()
-	return nil*/
+	return nil
 }
 
 func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error {
@@ -323,7 +357,7 @@ func metricLabelStrings(m model.Metric) (string, string) {
 
 // Write implements the Writer interface and writes metric samples to the database
 func (c *Client) Write(samples model.Samples) error {
-	begin := time.Now()
+	// begin := time.Now()
 	tx, err := c.DB.Begin()
 	if err != nil {
 		log.Error("msg", "Error on Begin when writing samples", "err", err)
@@ -332,26 +366,18 @@ func (c *Client) Write(samples model.Samples) error {
 
 	defer tx.Rollback()
 
-	// _, err = tx.Stmt(createTmpTableStmt).Exec()
-	// if err != nil {
-	// 	log.Error("msg", "Error executing create tmp table", "err", err)
-	// 	return err
-	// }
+	var copyTable string
+	if c.cfg.pgPrometheusNormalize {
+		copyTable = fmt.Sprintf("%s_tmp", c.cfg.table)
 
-	// var copyTable string
-	// if len(c.cfg.copyTable) > 0 {
-	// 	copyTable = c.cfg.copyTable
-	// } else if c.cfg.pgPrometheusNormalize {
-	// 	copyTable = fmt.Sprintf("%s_tmp", c.cfg.table)
-	// } else {
-	// 	copyTable = fmt.Sprintf("%s_samples", c.cfg.table)
-	// }
-	// copyStmt, err := tx.Prepare(fmt.Sprintf(sqlCopyTable, copyTable))
-
-	// if err != nil {
-	// 	log.Error("msg", "Error on COPY prepare", "err", err)
-	// 	return err
-	// }
+		_, err = tx.Exec(fmt.Sprintf(sqlCreateTmpTable, copyTable))
+		if err != nil {
+			log.Error("msg", "Error executing create tmp table", "err", err)
+			return err
+		}
+	} else {
+		copyTable = fmt.Sprintf("%s_samples", c.cfg.table)
+	}
 
 	for _, sample := range samples {
 		milliseconds := sample.Timestamp.UnixNano() / 1000000
@@ -362,87 +388,79 @@ func (c *Client) Write(samples model.Samples) error {
 			fmt.Println(line)
 		}
 
-		// _, err = tx.Exec("INSERT INTO metrics VALUES($1)", sample)
-		// timestamp INTEGER, name TEXT, value DOUBLE, labels JSON
-		log.Info("label_value:", labels)
+		var metricValue string
+		if math.IsNaN(float64(sample.Value)) {
+			metricValue = "NULL"
+		} else if math.IsInf(float64(sample.Value), 1) {
+			metricValue = fmt.Sprintf("%f", math.MaxFloat64)
+		} else if math.IsInf(float64(sample.Value), -1) {
+			metricValue = fmt.Sprintf("%f", -math.MaxFloat64)
+		} else {
+			metricValue = fmt.Sprintf("%f", sample.Value)
+		}
+		q := fmt.Sprintf("INSERT INTO %s VALUES(%v, \"%s\", %s, \"%s\")", copyTable, milliseconds, metricName, metricValue, Escape(labels))
 
-		fmt.Println("------QUERY-----")
-		fmt.Println(fmt.Sprintf("INSERT INTO %s VALUES(%v, %v, %v, %v)", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels)))
-		fmt.Println("----------------")
+		/* 		fmt.Println("------QUERY-----")
+		   		fmt.Println(q)
+		   		fmt.Println("----------------") */
 
-		_, err = tx.Exec(fmt.Sprintf("INSERT INTO %s VALUES(%v, \"%v\", %v, \"%v\")", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels)))
-		// _, err = tx.Exec("INSERT INTO ? VALUES(?, ?, ?, ?)", c.cfg.table, milliseconds, metricName, sample.Value, Escape(labels))
+		_, err = tx.Exec(q)
 		if err != nil {
 			log.Error("msg", "Error executing INSERT metrics statement", "stmt", line, "err", err)
 			return err
 		}
-
-		// _, err = copyStmt.Exec(line)
-		// if err != nil {
-		// 	log.Error("msg", "Error executing COPY statement", "stmt", line, "err", err)
-		// 	return err
-		// }
 	}
 
-	// _, err = copyStmt.Exec()
-	// if err != nil {
-	// 	log.Error("msg", "Error executing COPY statement", "err", err)
-	// 	return err
-	// }
+	if copyTable == fmt.Sprintf("%s_tmp", c.cfg.table) {
+		stmtLabels, err := tx.Prepare(fmt.Sprintf(sqlInsertLabels, c.cfg.table, copyTable))
+		if err != nil {
+			log.Error("msg", "Error on preparing labels statement", "err", err)
+			return err
+		}
+		_, err = stmtLabels.Exec()
+		if err != nil {
+			log.Error("msg", "Error executing labels statement", "err", err)
+			return err
+		}
 
-	// if copyTable == fmt.Sprintf("%s_tmp", c.cfg.table) {
-	// 	stmtLabels, err := tx.Prepare(fmt.Sprintf(sqlInsertLabels, c.cfg.table, c.cfg.table, c.cfg.table))
-	// 	if err != nil {
-	// 		log.Error("msg", "Error on preparing labels statement", "err", err)
-	// 		return err
-	// 	}
-	// 	_, err = stmtLabels.Exec()
-	// 	if err != nil {
-	// 		log.Error("msg", "Error executing labels statement", "err", err)
-	// 		return err
-	// 	}
+		stmtValues, err := tx.Prepare(fmt.Sprintf(sqlInsertValues, c.cfg.table, copyTable, c.cfg.table))
+		if err != nil {
+			log.Error("msg", "Error on preparing values statement", "err", err)
+			return err
+		}
+		_, err = stmtValues.Exec()
+		if err != nil {
+			log.Error("msg", "Error executing values statement", "err", err)
+			return err
+		}
 
-	// 	stmtValues, err := tx.Prepare(fmt.Sprintf(sqlInsertValues, c.cfg.table, c.cfg.table, c.cfg.table))
-	// 	if err != nil {
-	// 		log.Error("msg", "Error on preparing values statement", "err", err)
-	// 		return err
-	// 	}
-	// 	_, err = stmtValues.Exec()
-	// 	if err != nil {
-	// 		log.Error("msg", "Error executing values statement", "err", err)
-	// 		return err
-	// 	}
+		err = stmtLabels.Close()
+		if err != nil {
+			log.Error("msg", "Error on closing labels statement", "err", err)
+			return err
+		}
 
-	// 	err = stmtLabels.Close()
-	// 	if err != nil {
-	// 		log.Error("msg", "Error on closing labels statement", "err", err)
-	// 		return err
-	// 	}
+		err = stmtValues.Close()
+		if err != nil {
+			log.Error("msg", "Error on closing values statement", "err", err)
+			return err
+		}
 
-	// 	err = stmtValues.Close()
-	// 	if err != nil {
-	// 		log.Error("msg", "Error on closing values statement", "err", err)
-	// 		return err
-	// 	}
-	// }
-
-	// err = copyStmt.Close()
-	// if err != nil {
-	// 	log.Error("msg", "Error on COPY Close when writing samples", "err", err)
-	// 	return err
-	// }
+		_, err = tx.Exec(fmt.Sprintf("DROP TABLE %s", copyTable))
+		if err != nil {
+			log.Error("msg", "Error on dropping tmp table", "err", err)
+			return err
+		}
+	}
 
 	err = tx.Commit()
-
 	if err != nil {
 		log.Error("msg", "Error on Commit when writing samples", "err", err)
 		return err
 	}
 
-	duration := time.Since(begin).Seconds()
-
-	log.Debug("msg", "Wrote samples", "count", len(samples), "duration", duration)
-
+	// duration := time.Since(begin).Seconds()
+	// log.Debug("msg", "Wrote samples", "count", len(samples), "duration", duration)
 	return nil
 }
 
