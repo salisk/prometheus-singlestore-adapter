@@ -16,7 +16,7 @@ PKGS:= $(shell go list ./... | grep -v /vendor)
 
 SOURCES:=$(shell find . -name '*.go'  | grep -v './vendor')
 
-TARGET:=prometheus-postgresql-adapter
+TARGET:=prometheus-singlestore-adapter
 
 .PHONY: all clean build docker-image docker-push test
 

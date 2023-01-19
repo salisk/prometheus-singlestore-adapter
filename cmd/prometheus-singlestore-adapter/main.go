@@ -26,9 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/log"
-	pgprometheus "github.com/timescale/prometheus-postgresql-adapter/pkg/postgresql"
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/util"
+	"prometheus-singlestore-adapter/pkg/log"
+
+	pgprometheus "prometheus-singlestore-adapter/pkg/singlestore"
+
+	"prometheus-singlestore-adapter/pkg/util"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
@@ -40,7 +42,6 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
 
-	"database/sql"
 	"fmt"
 )
 
@@ -120,15 +121,15 @@ func main() {
 	http.Handle(cfg.telemetryPath, promhttp.Handler())
 
 	writer, reader := buildClients(cfg)
-	pgClient, ok := writer.(*pgprometheus.Client)
-	if ok {
-		elector = initElector(cfg, pgClient.DB)
-	} else {
-		log.Info("msg", "Running in read-only mode. This instance can't participate in leader election")
-	}
+	// pgClient, ok := writer.(*pgprometheus.Client)
+	// if ok {
+	// 	elector = initElector(cfg, pgClient.DB)
+	// } else {
+	// 	log.Info("msg", "Running in read-only mode. This instance can't participate in leader election")
+	// }
 
 	http.Handle("/write", timeHandler("write", write(writer)))
-	http.Handle("/read", timeHandler("read", read(reader)))
+	// http.Handle("/read", timeHandler("read", read(reader)))
 	http.Handle("/healthz", health(reader))
 
 	log.Info("msg", "Starting up...")
@@ -194,43 +195,43 @@ func buildClients(cfg *config) (writer, reader) {
 	return pgClient, pgClient
 }
 
-func initElector(cfg *config, db *sql.DB) *util.Elector {
-	if cfg.restElection && cfg.haGroupLockID != 0 {
-		log.Error("msg", "Use either REST or PgAdvisoryLock for the leader election")
-		os.Exit(1)
-	}
-	if cfg.restElection {
-		return util.NewElector(util.NewRestElection())
-	}
-	if cfg.haGroupLockID == 0 {
-		log.Warn("msg", "No adapter leader election. Group lock id is not set. Possible duplicate write load if running adapter in high-availability mode")
-		return nil
-	}
-	if cfg.prometheusTimeout == -1 {
-		log.Error("msg", "Prometheus timeout configuration must be set when using PG advisory lock")
-		os.Exit(1)
-	}
-	lock, err := util.NewPgAdvisoryLock(cfg.haGroupLockID, db)
-	if err != nil {
-		log.Error("msg", "Error creating advisory lock", "haGroupLockId", cfg.haGroupLockID, "err", err)
-		os.Exit(1)
-	}
-	scheduledElector := util.NewScheduledElector(lock, cfg.electionInterval)
-	log.Info("msg", "Initialized leader election based on PostgreSQL advisory lock")
-	if cfg.prometheusTimeout != 0 {
-		go func() {
-			ticker := time.NewTicker(promLivenessCheck)
-			for {
-				select {
-				case <-ticker.C:
-					lastReq := atomic.LoadInt64(&lastRequestUnixNano)
-					scheduledElector.PrometheusLivenessCheck(lastReq, cfg.prometheusTimeout)
-				}
-			}
-		}()
-	}
-	return &scheduledElector.Elector
-}
+// func initElector(cfg *config, db *sql.DB) *util.Elector {
+// 	if cfg.restElection && cfg.haGroupLockID != 0 {
+// 		log.Error("msg", "Use either REST or PgAdvisoryLock for the leader election")
+// 		os.Exit(1)
+// 	}
+// 	if cfg.restElection {
+// 		return util.NewElector(util.NewRestElection())
+// 	}
+// 	if cfg.haGroupLockID == 0 {
+// 		log.Warn("msg", "No adapter leader election. Group lock id is not set. Possible duplicate write load if running adapter in high-availability mode")
+// 		return nil
+// 	}
+// 	if cfg.prometheusTimeout == -1 {
+// 		log.Error("msg", "Prometheus timeout configuration must be set when using PG advisory lock")
+// 		os.Exit(1)
+// 	}
+// 	lock, err := util.NewPgAdvisoryLock(cfg.haGroupLockID, db)
+// 	if err != nil {
+// 		log.Error("msg", "Error creating advisory lock", "haGroupLockId", cfg.haGroupLockID, "err", err)
+// 		os.Exit(1)
+// 	}
+// 	scheduledElector := util.NewScheduledElector(lock, cfg.electionInterval)
+// 	log.Info("msg", "Initialized leader election based on PostgreSQL advisory lock")
+// 	if cfg.prometheusTimeout != 0 {
+// 		go func() {
+// 			ticker := time.NewTicker(promLivenessCheck)
+// 			for {
+// 				select {
+// 				case <-ticker.C:
+// 					lastReq := atomic.LoadInt64(&lastRequestUnixNano)
+// 					scheduledElector.PrometheusLivenessCheck(lastReq, cfg.prometheusTimeout)
+// 				}
+// 			}
+// 		}()
+// 	}
+// 	return &scheduledElector.Elector
+// }
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -285,53 +286,53 @@ func getCounterValue(counter prometheus.Counter) float64 {
 	return dtoMetric.GetCounter().GetValue()
 }
 
-func read(reader reader) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		compressed, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			log.Error("msg", "Read error", "err", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+// func read(reader reader) http.Handler {
+// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		compressed, err := ioutil.ReadAll(r.Body)
+// 		if err != nil {
+// 			log.Error("msg", "Read error", "err", err.Error())
+// 			http.Error(w, err.Error(), http.StatusInternalServerError)
+// 			return
+// 		}
 
-		reqBuf, err := snappy.Decode(nil, compressed)
-		if err != nil {
-			log.Error("msg", "Decode error", "err", err.Error())
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+// 		reqBuf, err := snappy.Decode(nil, compressed)
+// 		if err != nil {
+// 			log.Error("msg", "Decode error", "err", err.Error())
+// 			http.Error(w, err.Error(), http.StatusBadRequest)
+// 			return
+// 		}
 
-		var req prompb.ReadRequest
-		if err := proto.Unmarshal(reqBuf, &req); err != nil {
-			log.Error("msg", "Unmarshal error", "err", err.Error())
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+// 		var req prompb.ReadRequest
+// 		if err := proto.Unmarshal(reqBuf, &req); err != nil {
+// 			log.Error("msg", "Unmarshal error", "err", err.Error())
+// 			http.Error(w, err.Error(), http.StatusBadRequest)
+// 			return
+// 		}
 
-		var resp *prompb.ReadResponse
-		resp, err = reader.Read(&req)
-		if err != nil {
-			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+// 		var resp *prompb.ReadResponse
+// 		resp, err = reader.Read(&req)
+// 		if err != nil {
+// 			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
+// 			http.Error(w, err.Error(), http.StatusInternalServerError)
+// 			return
+// 		}
 
-		data, err := proto.Marshal(resp)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+// 		data, err := proto.Marshal(resp)
+// 		if err != nil {
+// 			http.Error(w, err.Error(), http.StatusInternalServerError)
+// 			return
+// 		}
 
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.Header().Set("Content-Encoding", "snappy")
+// 		w.Header().Set("Content-Type", "application/x-protobuf")
+// 		w.Header().Set("Content-Encoding", "snappy")
 
-		compressed = snappy.Encode(nil, data)
-		if _, err := w.Write(compressed); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	})
-}
+// 		compressed = snappy.Encode(nil, data)
+// 		if _, err := w.Write(compressed); err != nil {
+// 			http.Error(w, err.Error(), http.StatusInternalServerError)
+// 			return
+// 		}
+// 	})
+// }
 
 func health(reader reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -368,13 +369,13 @@ func sendSamples(w writer, samples model.Samples) error {
 	begin := time.Now()
 	shouldWrite := true
 	var err error
-	if elector != nil {
-		shouldWrite, err = elector.IsLeader()
-		if err != nil {
-			log.Error("msg", "IsLeader check failed", "err", err)
-			return err
-		}
-	}
+	// if elector != nil {
+	// 	shouldWrite, err = elector.IsLeader()
+	// 	if err != nil {
+	// 		log.Error("msg", "IsLeader check failed", "err", err)
+	// 		return err
+	// 	}
+	// }
 	if shouldWrite {
 		err = w.Write(samples)
 	} else {

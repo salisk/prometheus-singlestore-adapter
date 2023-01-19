@@ -1,5 +1,5 @@
 # Final image
 FROM busybox
 MAINTAINER Singlestore 
-COPY --from=builder /go/prometheus-postgresql-adapter /
-ENTRYPOINT ["/prometheus-postgresql-adapter"]
+COPY bin/prometheus-singlestore-adapter /
+ENTRYPOINT ["/prometheus-singlestore-adapter"]

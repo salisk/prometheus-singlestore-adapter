@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/log"
 )
 
 //ThroughputCalc runs on scheduled interval to calculate the throughput per second and sends results to a channel

@@ -1,14 +1,14 @@
-module github.com/timescale/prometheus-postgresql-adapter
+module prometheus-singlestore-adapter
 
-go 1.12
+go 1.15
 
 require (
 	github.com/go-kit/kit v0.9.0
+	github.com/go-sql-driver/mysql v1.4.1
 	github.com/gogo/protobuf v1.2.1
 	github.com/golang/snappy v0.0.1
 	github.com/grpc-ecosystem/grpc-gateway v1.9.5 // indirect
 	github.com/jamiealquiza/envy v1.1.0
-	github.com/lib/pq v1.2.0
 	github.com/prometheus/client_golang v1.0.0
 	github.com/prometheus/client_model v0.0.0-20190129233127-fd36f4220a90
 	github.com/prometheus/common v0.6.0

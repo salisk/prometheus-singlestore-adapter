@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/log"
 )
 
 const (

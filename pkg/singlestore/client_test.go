@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"prometheus-singlestore-adapter/pkg/log"
+
+	"prometheus-singlestore-adapter/pkg/util"
+
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/log"
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/util"
 )
 
 var (

@@ -21,16 +21,16 @@ for better performance and scalability)
 
 ## Quick start
 
-You can download pre-built binaries [here](https://github.com/timescale/prometheus-postgresql-adapter/releases)
+You can download pre-built binaries [here](https://github.com/timescale/prometheus-singlestore-adapter/releases)
 
 ## Docker instructions
 
-A docker image for the prometheus-postgreSQL storage adapter is available
-on Docker Hub at [timescale/prometheus-postgresql-adapter](https://hub.docker.com/r/timescale/prometheus-postgresql-adapter/).
+A docker image for the prometheus-SingleStore storage adapter is available
+on Docker Hub at [timescale/prometheus-singlestore-adapter](https://hub.docker.com/r/timescale/prometheus-singlestore-adapter/).
 
 The easiest way to use this image is in conjunction with the `pg_prometheus`
 docker [image](https://hub.docker.com/r/timescale/pg_prometheus/) provided by Timescale.
-This image packages PostgreSQL, `pg_prometheus`, and TimescaleDB together in one
+This image packages SingleStore, `pg_prometheus`, and TimescaleDB together in one
 docker image.
 
 To run this image use:
@@ -39,10 +39,10 @@ docker run --name pg_prometheus -d -e POSTGRES_PASSWORD=mypass -p 5432:5432 time
  postgres -csynchronous_commit=off
 ```
 
-Then, start the prometheus-postgreSQL storage adapter using:
+Then, start the prometheus-SingleStore storage adapter using:
 ```
- docker run --name prometheus_postgresql_adapter --link pg_prometheus -d -p 9201:9201 \
- timescale/prometheus-postgresql-adapter:latest \
+ docker run --name prometheus_singlestore_adapter --link pg_prometheus -d -p 9201:9201 \
+ timescale/prometheus-singlestore-adapter:latest \
  -pg-host=pg_prometheus \
  -pg-password=mypass \
  -pg-prometheus-log-samples
@@ -50,7 +50,7 @@ Then, start the prometheus-postgreSQL storage adapter using:
 
 Finally, you can start Prometheus with:
 ```
-docker run -p 9090:9090 --link prometheus_postgresql_adapter -v /path/to/prometheus.yml:/etc/prometheus/prometheus.yml \
+docker run -p 9090:9090 --link prometheus_singlestore_adapter -v /path/to/prometheus.yml:/etc/prometheus/prometheus.yml \
        prom/prometheus
 ```
 (a sample `prometheus.yml` file can be found in `sample-docker-prometheus.yml` in this repository).
@@ -79,7 +79,7 @@ For example, the following mappings apply:
 ...
 ```
 
-Each CLI flag and equivalent environment variable is also displayed on the help `prometheus-postgresql-adapter -h` command.
+Each CLI flag and equivalent environment variable is also displayed on the help `prometheus-singlestore-adapter -h` command.
 
 ## Configuring Prometheus to filter which metrics are sent
 
@@ -92,7 +92,7 @@ exposed by exporters like `node_exporter`:
 
 ```
 remote_write:
- - url: "http://prometheus_postgresql_adapter:9201/write"
+ - url: "http://prometheus_singlestore_adapter:9201/write"
    write_relabel_configs:
       - source_labels: [__name__]
         regex: 'go_.*'
@@ -128,4 +128,4 @@ make docker-push ORGANIZATION=myorg
 
 ## Contributing
 
-We welcome contributions to this adaptor, which like TimescaleDB is released under the Apache2 Open Source License.  The same [Contributors Agreement](//github.com/timescale/timescaledb/blob/master/CONTRIBUTING.md) applies; please sign the [Contributor License Agreement](https://cla-assistant.io/timescale/prometheus-postgresql-adapter) (CLA) if you're a new contributor.
+We welcome contributions to this adaptor, which like TimescaleDB is released under the Apache2 Open Source License.  The same [Contributors Agreement](//github.com/timescale/timescaledb/blob/master/CONTRIBUTING.md) applies; please sign the [Contributor License Agreement](https://cla-assistant.io/timescale/prometheus-singlestore-adapter) (CLA) if you're a new contributor.

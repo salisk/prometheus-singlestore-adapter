@@ -1,5 +1,5 @@
 *~
-/prometheus-postgresql-adapter*
+/prometheus-singlestore-adapter*
 /vendor
 /version.properties
 /.target_os

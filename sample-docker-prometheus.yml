@@ -15,9 +15,9 @@ rule_files:
   # - "second.rules"
 
 remote_write:
-    - url: "http://prometheus_postgresql_adapter:9201/write"
+    - url: "http://prometheus_singlestore_adapter:9201/write"
 remote_read:
-    - url: "http://prometheus_postgresql_adapter:9201/read"
+    - url: "http://prometheus_singlestore_adapter:9201/read"
 
 # A scrape configuration containing exactly one endpoint to scrape:
 # Here it's Prometheus itself.

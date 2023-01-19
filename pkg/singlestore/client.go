@@ -12,10 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/log"
-	"github.com/timescale/prometheus-postgresql-adapter/pkg/util"
+	"prometheus-singlestore-adapter/pkg/util"
 
-	_ "github.com/lib/pq"
+	"prometheus-singlestore-adapter/pkg/log"
+
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
@@ -87,7 +88,7 @@ func NewClient(cfg *Config) *Client {
 		cfg.host, cfg.port, cfg.user, cfg.database, cfg.password, cfg.sslMode)
 
 	wrappedDb, err := util.RetryWithFixedDelay(uint(cfg.dbConnectRetries), time.Second, func() (interface{}, error) {
-		return sql.Open("postgres", connStr)
+		return sql.Open("mysql", connStr)
 	})
 
 	log.Info("msg", regexp.MustCompile("password='(.+?)'").ReplaceAllLiteralString(connStr, "password='****'"))
@@ -108,25 +109,25 @@ func NewClient(cfg *Config) *Client {
 	}
 
 	if !cfg.readOnly {
-		installExtensions, installSchema, err := client.verifyPgPrometheus()
+		// installExtensions, installSchema, err := client.verifyPgPrometheus()
 
-		if err != nil {
-			log.Error("err", err)
-			os.Exit(1)
-		}
+		// if err != nil {
+		// 	log.Error("err", err)
+		// 	os.Exit(1)
+		// }
 
-		err = client.setupPgPrometheus(installExtensions, installSchema)
+		// err = client.setupPgPrometheus(installExtensions, installSchema)
 
-		if err != nil {
-			log.Error("err", err)
-			os.Exit(1)
-		}
+		// if err != nil {
+		// 	log.Error("err", err)
+		// 	os.Exit(1)
+		// }
 
-		createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
-		if err != nil {
-			log.Error("msg", "Error on preparing create tmp table statement", "err", err)
-			os.Exit(1)
-		}
+		// createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
+		// if err != nil {
+		// 	log.Error("msg", "Error on preparing create tmp table statement", "err", err)
+		// 	os.Exit(1)
+		// }
 	} else {
 		log.Info("msg", "Running in read-only mode. Skipping schema/extension setup (should already be present)")
 	}
@@ -220,35 +221,35 @@ func metricString(m model.Metric) string {
 // Write implements the Writer interface and writes metric samples to the database
 func (c *Client) Write(samples model.Samples) error {
 	begin := time.Now()
-	tx, err := c.DB.Begin()
+	// tx, err := c.DB.Begin()
 
-	if err != nil {
-		log.Error("msg", "Error on Begin when writing samples", "err", err)
-		return err
-	}
+	// if err != nil {
+	// 	log.Error("msg", "Error on Begin when writing samples", "err", err)
+	// 	return err
+	// }
 
-	defer tx.Rollback()
+	// defer tx.Rollback()
 
-	_, err = tx.Stmt(createTmpTableStmt).Exec()
-	if err != nil {
-		log.Error("msg", "Error executing create tmp table", "err", err)
-		return err
-	}
+	// _, err = tx.Stmt(createTmpTableStmt).Exec()
+	// if err != nil {
+	// 	log.Error("msg", "Error executing create tmp table", "err", err)
+	// 	return err
+	// }
 
-	var copyTable string
-	if len(c.cfg.copyTable) > 0 {
-		copyTable = c.cfg.copyTable
-	} else if c.cfg.pgPrometheusNormalize {
-		copyTable = fmt.Sprintf("%s_tmp", c.cfg.table)
-	} else {
-		copyTable = fmt.Sprintf("%s_samples", c.cfg.table)
-	}
-	copyStmt, err := tx.Prepare(fmt.Sprintf(sqlCopyTable, copyTable))
+	// var copyTable string
+	// if len(c.cfg.copyTable) > 0 {
+	// 	copyTable = c.cfg.copyTable
+	// } else if c.cfg.pgPrometheusNormalize {
+	// 	copyTable = fmt.Sprintf("%s_tmp", c.cfg.table)
+	// } else {
+	// 	copyTable = fmt.Sprintf("%s_samples", c.cfg.table)
+	// }
+	// copyStmt, err := tx.Prepare(fmt.Sprintf(sqlCopyTable, copyTable))
 
-	if err != nil {
-		log.Error("msg", "Error on COPY prepare", "err", err)
-		return err
-	}
+	// if err != nil {
+	// 	log.Error("msg", "Error on COPY prepare", "err", err)
+	// 	return err
+	// }
 
 	for _, sample := range samples {
 		milliseconds := sample.Timestamp.UnixNano() / 1000000
@@ -258,67 +259,67 @@ func (c *Client) Write(samples model.Samples) error {
 			fmt.Println(line)
 		}
 
-		_, err = copyStmt.Exec(line)
-		if err != nil {
-			log.Error("msg", "Error executing COPY statement", "stmt", line, "err", err)
-			return err
-		}
+		// _, err = copyStmt.Exec(line)
+		// if err != nil {
+		// 	log.Error("msg", "Error executing COPY statement", "stmt", line, "err", err)
+		// 	return err
+		// }
 	}
 
-	_, err = copyStmt.Exec()
-	if err != nil {
-		log.Error("msg", "Error executing COPY statement", "err", err)
-		return err
-	}
+	// _, err = copyStmt.Exec()
+	// if err != nil {
+	// 	log.Error("msg", "Error executing COPY statement", "err", err)
+	// 	return err
+	// }
 
-	if copyTable == fmt.Sprintf("%s_tmp", c.cfg.table) {
-		stmtLabels, err := tx.Prepare(fmt.Sprintf(sqlInsertLabels, c.cfg.table, c.cfg.table, c.cfg.table))
-		if err != nil {
-			log.Error("msg", "Error on preparing labels statement", "err", err)
-			return err
-		}
-		_, err = stmtLabels.Exec()
-		if err != nil {
-			log.Error("msg", "Error executing labels statement", "err", err)
-			return err
-		}
+	// if copyTable == fmt.Sprintf("%s_tmp", c.cfg.table) {
+	// 	stmtLabels, err := tx.Prepare(fmt.Sprintf(sqlInsertLabels, c.cfg.table, c.cfg.table, c.cfg.table))
+	// 	if err != nil {
+	// 		log.Error("msg", "Error on preparing labels statement", "err", err)
+	// 		return err
+	// 	}
+	// 	_, err = stmtLabels.Exec()
+	// 	if err != nil {
+	// 		log.Error("msg", "Error executing labels statement", "err", err)
+	// 		return err
+	// 	}
 
-		stmtValues, err := tx.Prepare(fmt.Sprintf(sqlInsertValues, c.cfg.table, c.cfg.table, c.cfg.table))
-		if err != nil {
-			log.Error("msg", "Error on preparing values statement", "err", err)
-			return err
-		}
-		_, err = stmtValues.Exec()
-		if err != nil {
-			log.Error("msg", "Error executing values statement", "err", err)
-			return err
-		}
+	// 	stmtValues, err := tx.Prepare(fmt.Sprintf(sqlInsertValues, c.cfg.table, c.cfg.table, c.cfg.table))
+	// 	if err != nil {
+	// 		log.Error("msg", "Error on preparing values statement", "err", err)
+	// 		return err
+	// 	}
+	// 	_, err = stmtValues.Exec()
+	// 	if err != nil {
+	// 		log.Error("msg", "Error executing values statement", "err", err)
+	// 		return err
+	// 	}
 
-		err = stmtLabels.Close()
-		if err != nil {
-			log.Error("msg", "Error on closing labels statement", "err", err)
-			return err
-		}
+	// 	err = stmtLabels.Close()
+	// 	if err != nil {
+	// 		log.Error("msg", "Error on closing labels statement", "err", err)
+	// 		return err
+	// 	}
 
-		err = stmtValues.Close()
-		if err != nil {
-			log.Error("msg", "Error on closing values statement", "err", err)
-			return err
-		}
-	}
+	// 	err = stmtValues.Close()
+	// 	if err != nil {
+	// 		log.Error("msg", "Error on closing values statement", "err", err)
+	// 		return err
+	// 	}
+	// }
 
-	err = copyStmt.Close()
-	if err != nil {
-		log.Error("msg", "Error on COPY Close when writing samples", "err", err)
-		return err
-	}
+	// err = copyStmt.Close()
+	// if err != nil {
+	// 	log.Error("msg", "Error on COPY Close when writing samples", "err", err)
+	// 	return err
+	// }
 
-	err = tx.Commit()
+	// err = tx.Commit()
 
-	if err != nil {
-		log.Error("msg", "Error on Commit when writing samples", "err", err)
-		return err
-	}
+	// if err != nil {
+	// 	log.Error("msg", "Error on Commit when writing samples", "err", err)
+	// 	return err
+	// }
 
 	duration := time.Since(begin).Seconds()
 
@@ -650,7 +651,7 @@ func anchorValue(str string) string {
 
 // Name identifies the client as a PostgreSQL client.
 func (c Client) Name() string {
-	return "PostgreSQL"
+	return "SingleStore"
 }
 
 // Describe implements prometheus.Collector.

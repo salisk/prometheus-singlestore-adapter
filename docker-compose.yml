@@ -12,7 +12,7 @@ services:
     - 9090:9090/tcp
     volumes:
     - ./sample-docker-prometheus.yml:/etc/prometheus/prometheus.yml:ro
-  prometheus_postgresql_adapter:
+  prometheus_singlestore_adapter:
     build:
       context: .
     depends_on:
@@ -25,7 +25,7 @@ services:
       TS_PROM_PG_PASSWORD: postgres
       TS_PROM_PG_SCHEMA: postgres
       TS_PROM_WEB_TELEMETRY_PATH: /metrics-text
-    image: timescale/prometheus-postgresql-adapter:latest
+    image: timescale/prometheus-singlestore-adapter:latest
     ports:
     - 9201:9201/tcp
 version: '3.0'
