@@ -108,31 +108,42 @@ func NewClient(cfg *Config) *Client {
 		cfg: cfg,
 	}
 
-	if !cfg.readOnly {
-		// installExtensions, installSchema, err := client.verifyPgPrometheus()
-
-		// if err != nil {
-		// 	log.Error("err", err)
-		// 	os.Exit(1)
-		// }
-
-		// err = client.setupPgPrometheus(installExtensions, installSchema)
-
-		// if err != nil {
-		// 	log.Error("err", err)
-		// 	os.Exit(1)
-		// }
-
-		// createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
-		// if err != nil {
-		// 	log.Error("msg", "Error on preparing create tmp table statement", "err", err)
-		// 	os.Exit(1)
-		// }
-	} else {
-		log.Info("msg", "Running in read-only mode. Skipping schema/extension setup (should already be present)")
+	err = client.setupS2Prometheus()
+	if err != nil {
+		log.Error("err", "Error on setting prometheus for SingleStore", err)
+		os.Exit(1)
 	}
 
+	// if !cfg.readOnly {
+	// 	installExtensions, installSchema, err := client.verifyPgPrometheus()
+
+	// 	if err != nil {
+	// 		log.Error("err", err)
+	// 		os.Exit(1)
+	// 	}
+
+	// 	err = client.setupPgPrometheus(installExtensions, installSchema)
+
+	// 	if err != nil {
+	// 		log.Error("err", err)
+	// 		os.Exit(1)
+	// 	}
+
+	// 	createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
+	// 	if err != nil {
+	// 		log.Error("msg", "Error on preparing create tmp table statement", "err", err)
+	// 		os.Exit(1)
+	// 	}
+	// } else {
+	// 	log.Info("msg", "Running in read-only mode. Skipping schema/extension setup (should already be present)")
+	// }
+
 	return client
+}
+
+func (c *Client) setupS2Prometheus() error {
+	_, err := c.DB.Exec("CREATE TABLE metrics(timestamp JSON, metric JSON, value JSON)")
+	return err
 }
 
 func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error {
@@ -221,14 +232,14 @@ func metricString(m model.Metric) string {
 // Write implements the Writer interface and writes metric samples to the database
 func (c *Client) Write(samples model.Samples) error {
 	begin := time.Now()
-	// tx, err := c.DB.Begin()
+	tx, err := c.DB.Begin()
 
-	// if err != nil {
-	// 	log.Error("msg", "Error on Begin when writing samples", "err", err)
-	// 	return err
-	// }
+	if err != nil {
+		log.Error("msg", "Error on Begin when writing samples", "err", err)
+		return err
+	}
 
-	// defer tx.Rollback()
+	defer tx.Rollback()
 
 	// _, err = tx.Stmt(createTmpTableStmt).Exec()
 	// if err != nil {
@@ -257,6 +268,12 @@ func (c *Client) Write(samples model.Samples) error {
 
 		if c.cfg.pgPrometheusLogSamples {
 			fmt.Println(line)
+		}
+
+		_, err = tx.Exec("INSERT INTO metrics VALUES($1)", sample)
+		if err != nil {
+			log.Error("msg", "Error executing INSERT metrics statement", "stmt", line, "err", err)
+			return err
 		}
 
 		// _, err = copyStmt.Exec(line)
@@ -314,12 +331,12 @@ func (c *Client) Write(samples model.Samples) error {
 	// 	return err
 	// }
 
-	// err = tx.Commit()
+	err = tx.Commit()
 
-	// if err != nil {
-	// 	log.Error("msg", "Error on Commit when writing samples", "err", err)
-	// 	return err
-	// }
+	if err != nil {
+		log.Error("msg", "Error on Commit when writing samples", "err", err)
+		return err
+	}
 
 	duration := time.Since(begin).Seconds()
 
