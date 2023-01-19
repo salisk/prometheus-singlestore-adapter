@@ -31,7 +31,7 @@ version.properties:
 build: $(TARGET)
 
 $(TARGET): .target_os $(SOURCES)
-	GOOS=$(OS) GOARCH=${ARCH} CGO_ENABLED=0 go build -a --ldflags '-w' -o $@ ./cmd/$@
+	GOOS=$(OS) GOARCH=${ARCH} CGO_ENABLED=0 go build -a --ldflags '-w' -o bin/$@ ./cmd/$@
 
 docker-image: version.properties
 	docker build -t $(ORGANIZATION)/$(TARGET):latest .

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-singlestore-adapter
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      run: prometheus-singlestore-adapter
+  template:
+    metadata:
+      labels:
+        run: prometheus-singlestore-adapter
+    spec:
+      containers:
+        - env:
+            - name: TS_PROM_LOG_LEVEL
+              value: "debug"
+            - name: TS_PROM_PG_DB_CONNECT_RETRIES
+              value: "10"
+            - name: TS_PROM_PG_HOST
+              value: "db"
+            - name: TS_PROM_PG_PASSWORD
+              value: "postgres"
+            - name: TS_PROM_PG_SCHEMA
+              value: "postgres"
+            - name: TS_PROM_WEB_TELEMETRY_PATH
+              value: "/metrics-text"
+          image: prometheus-singlestore-adapter
+          name: prometheus-singlestore-adapter
+          ports:
+            - containerPort: 9201
+              name: api
+      dnsPolicy: ClusterFirst
+      hostNetwork: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations: {}
+  labels:
+    run: prometheus-singlestore-adapter
+  name: prometheus-singlestore-adapter
+  namespace: default
+spec:
+  ports:
+    - name: api
+      port: 9201
+      targetPort: 9201
+  selector:
+    run: prometheus-singlestore-adapter
+  type: ClusterIP
