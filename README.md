@@ -1,37 +1,8 @@
-# **NOTICE: THIS PROJECT HAS BEEN SUPERSEDED BY PROMSCALE**
+# Prometheus remote storage adapter for SingleStore
 
-This project has been superseded by [Promscale](https://github.com/timescale/Promscale). 
-Like this project, Promscale allows easy storage of Prometheus metrics in TimescaleDB + Postgres, 
-but also offers: automatic partitioning, native compression (typically 95% storage savings), 
-native data retention policies, full SQL and PromQL, and more.
-
-You can find the new project at [https://github.com/timescale/promscale](https://github.com/timescale/promscale) 
-and more details can be found in our [design document](https://tsdb.co/prom-design-doc).
-
-This project will continue only in maintenance mode.
-
-# Prometheus remote storage adapter for PostgreSQL
-
-With this remote storage adapter, Prometheus can use PostgreSQL as a long-term store for time-series metrics.
-
-Related packages to install:
-- [pg_prometheus extension for PostgreSQL](https://github.com/timescale/pg_prometheus) (required)
-- [TimescaleDB](https://github.com/timescale/timescaledb) (optional
-for better performance and scalability)
-
-## Quick start
-
-You can download pre-built binaries [here](https://github.com/timescale/prometheus-singlestore-adapter/releases)
+With this remote storage adapter, Prometheus can use SingleStore as a long-term store for time-series metrics.
 
 ## Docker instructions
-
-A docker image for the prometheus-SingleStore storage adapter is available
-on Docker Hub at [timescale/prometheus-singlestore-adapter](https://hub.docker.com/r/timescale/prometheus-singlestore-adapter/).
-
-The easiest way to use this image is in conjunction with the `pg_prometheus`
-docker [image](https://hub.docker.com/r/timescale/pg_prometheus/) provided by Timescale.
-This image packages SingleStore, `pg_prometheus`, and TimescaleDB together in one
-docker image.
 
 To run this image use:
 ```
@@ -125,7 +96,3 @@ make docker-image
 # Push to Docker registry (requires permission)
 make docker-push ORGANIZATION=myorg
 ```
-
-## Contributing
-
-We welcome contributions to this adaptor, which like TimescaleDB is released under the Apache2 Open Source License.  The same [Contributors Agreement](//github.com/timescale/timescaledb/blob/master/CONTRIBUTING.md) applies; please sign the [Contributor License Agreement](https://cla-assistant.io/timescale/prometheus-singlestore-adapter) (CLA) if you're a new contributor.

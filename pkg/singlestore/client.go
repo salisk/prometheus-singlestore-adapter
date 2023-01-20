@@ -1,4 +1,4 @@
-package pgprometheus
+package s2prometheus
 
 import (
 	"database/sql"
@@ -28,16 +28,12 @@ type Config struct {
 	user                      string
 	password                  string
 	database                  string
-	schema                    string
-	sslMode                   string
 	table                     string
-	copyTable                 string
 	maxOpenConns              int
 	maxIdleConns              int
-	pgPrometheusNormalize     bool
-	pgPrometheusLogSamples    bool
-	pgPrometheusChunkInterval time.Duration
-	useTimescaleDb            bool
+	s2PrometheusNormalize     bool
+	s2PrometheusLogSamples    bool
+	s2PrometheusChunkInterval time.Duration
 	dbConnectRetries          int
 	readOnly                  bool
 }
@@ -49,40 +45,32 @@ func ParseFlags(cfg *Config) *Config {
 	flag.StringVar(&cfg.user, "pg-user", "postgres", "The PostgreSQL user")
 	flag.StringVar(&cfg.password, "pg-password", "", "The PostgreSQL password")
 	flag.StringVar(&cfg.database, "pg-database", "postgres", "The PostgreSQL database")
-	flag.StringVar(&cfg.schema, "pg-schema", "", "The PostgreSQL schema")
-	flag.StringVar(&cfg.sslMode, "pg-ssl-mode", "disable", "The PostgreSQL connection ssl mode")
 	flag.StringVar(&cfg.table, "pg-table", "metrics", "Override prefix for internal tables. It is also a view name used for querying")
-	flag.StringVar(&cfg.copyTable, "pg-copy-table", "", "Override default table to COPY data to")
 	flag.IntVar(&cfg.maxOpenConns, "pg-max-open-conns", 50, "The max number of open connections to the database")
 	flag.IntVar(&cfg.maxIdleConns, "pg-max-idle-conns", 10, "The max number of idle connections to the database")
-	flag.BoolVar(&cfg.pgPrometheusNormalize, "pg-prometheus-normalized-schema", true, "Insert metric samples into normalized schema")
-	flag.BoolVar(&cfg.pgPrometheusLogSamples, "pg-prometheus-log-samples", false, "Log raw samples to stdout")
-	flag.DurationVar(&cfg.pgPrometheusChunkInterval, "pg-prometheus-chunk-interval", time.Hour*12, "The size of a time-partition chunk in TimescaleDB")
-	flag.BoolVar(&cfg.useTimescaleDb, "pg-use-timescaledb", true, "Use timescaleDB")
+	flag.BoolVar(&cfg.s2PrometheusNormalize, "pg-prometheus-normalized-schema", true, "Insert metric samples into normalized schema")
+	flag.BoolVar(&cfg.s2PrometheusLogSamples, "pg-prometheus-log-samples", false, "Log raw samples to stdout")
+	flag.DurationVar(&cfg.s2PrometheusChunkInterval, "pg-prometheus-chunk-interval", time.Hour*12, "The size of a time-partition chunk in TimescaleDB")
 	flag.IntVar(&cfg.dbConnectRetries, "pg-db-connect-retries", 0, "How many times to retry connecting to the database")
 	flag.BoolVar(&cfg.readOnly, "pg-read-only", false, "Read-only mode. Don't write to database. Useful when pointing adapter to read replica")
 	return cfg
 }
 
-// Client sends Prometheus samples to PostgreSQL
+// Client sends Prometheus samples to MySQL
 type Client struct {
 	DB  *sql.DB
 	cfg *Config
 }
 
 const (
-	// sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s_tmp(sample prom_sample) ON COMMIT DELETE ROWS;"
 	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s(time BIGINT, name TEXT, value DOUBLE, labels JSON)"
-	// sqlCopyTable      = "COPY \"%s\" FROM STDIN"
-	sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT name, labels FROM %s"
-	// sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT tmp.prom_name, tmp.prom_labels FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp LEFT JOIN %s_labels l ON tmp.prom_name=l.metric_name AND tmp.prom_labels=l.labels WHERE l.metric_name IS NULL ON CONFLICT (metric_name, labels) DO NOTHING;"
-	sqlInsertValues = "INSERT INTO %s_values SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
-	// sqlInsertValues = "INSERT INTO %s_values SELECT tmp.prom_time, tmp.prom_value, l.id FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp INNER JOIN %s_labels l on tmp.prom_name=l.metric_name AND  tmp.prom_labels=l.labels;"
+	sqlInsertLabels   = "INSERT INTO %s_labels (metric_name, labels) SELECT name, labels FROM %s"
+	sqlInsertValues   = "INSERT INTO %s_values SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
 )
 
 var createTmpTableStmt *sql.Stmt
 
-// NewClient creates a new PostgreSQL client
+// NewClient creates a new MySQL client
 func NewClient(cfg *Config) *Client {
 	connParams := strings.Join([]string{
 		// convert timestame and date to time.Time
@@ -128,36 +116,6 @@ func NewClient(cfg *Config) *Client {
 		log.Error("err", "Error on setting prometheus for SingleStore", err)
 		os.Exit(1)
 	}
-
-	// createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
-	// if err != nil {
-	// 	log.Error("msg", "Error on preparing create tmp table statement", "err", err)
-	// 	os.Exit(1)
-	// }
-
-	// if !cfg.readOnly {
-	// 	installExtensions, installSchema, err := client.verifyPgPrometheus()
-
-	// 	if err != nil {
-	// 		log.Error("err", err)
-	// 		os.Exit(1)
-	// 	}
-
-	// 	err = client.setupPgPrometheus(installExtensions, installSchema)
-
-	// 	if err != nil {
-	// 		log.Error("err", err)
-	// 		os.Exit(1)
-	// 	}
-
-	// 	createTmpTableStmt, err = db.Prepare(fmt.Sprintf(sqlCreateTmpTable, cfg.table))
-	// 	if err != nil {
-	// 		log.Error("msg", "Error on preparing create tmp table statement", "err", err)
-	// 		os.Exit(1)
-	// 	}
-	// } else {
-	// 	log.Info("msg", "Running in read-only mode. Skipping schema/extension setup (should already be present)")
-	// }
 
 	return client
 }
@@ -207,7 +165,7 @@ func (c *Client) setupS2Prometheus() error {
 	tx, err := c.DB.Begin()
 	defer tx.Rollback()
 
-	if c.cfg.pgPrometheusNormalize {
+	if c.cfg.s2PrometheusNormalize {
 		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_values(time BIGINT, value DOUBLE, labels_id INTEGER)", c.cfg.table))
 		if err != nil {
 			return err
@@ -245,59 +203,6 @@ func (c *Client) setupS2Prometheus() error {
 	}
 
 	tx.Commit()
-	return nil
-}
-
-func (c *Client) setupPgPrometheus(installExtensions, installSchema bool) error {
-	if !installExtensions && !installSchema {
-		log.Info("msg", "Extensions and schema already installed, skipping setup.")
-		return nil
-	}
-
-	tx, err := c.DB.Begin()
-	if err != nil {
-		return err
-	}
-
-	defer tx.Rollback()
-
-	if installExtensions {
-		_, err = tx.Exec("CREATE EXTENSION IF NOT EXISTS pg_prometheus")
-
-		if err != nil {
-			return err
-		}
-
-		if c.cfg.useTimescaleDb {
-			_, err = tx.Exec("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE")
-		}
-		if err != nil {
-			log.Info("msg", "Could not enable TimescaleDB extension", "err", err)
-		}
-	}
-
-	if installSchema {
-		var rows *sql.Rows
-		rows, err = tx.Query("SELECT create_prometheus_table(?, normalized_tables => ?, chunk_time_interval => ?,  use_timescaledb => ?)",
-			c.cfg.table, c.cfg.pgPrometheusNormalize, c.cfg.pgPrometheusChunkInterval.String(), c.cfg.useTimescaleDb)
-
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") {
-				return nil
-			}
-			return err
-		}
-		rows.Close()
-	}
-
-	err = tx.Commit()
-
-	if err != nil {
-		return err
-	}
-
-	log.Info("msg", "Initialized pg_prometheus extension")
-
 	return nil
 }
 
@@ -357,7 +262,7 @@ func metricLabelStrings(m model.Metric) (string, string) {
 
 // Write implements the Writer interface and writes metric samples to the database
 func (c *Client) Write(samples model.Samples) error {
-	// begin := time.Now()
+	begin := time.Now()
 	tx, err := c.DB.Begin()
 	if err != nil {
 		log.Error("msg", "Error on Begin when writing samples", "err", err)
@@ -367,7 +272,7 @@ func (c *Client) Write(samples model.Samples) error {
 	defer tx.Rollback()
 
 	var copyTable string
-	if c.cfg.pgPrometheusNormalize {
+	if c.cfg.s2PrometheusNormalize {
 		copyTable = fmt.Sprintf("%s_tmp", c.cfg.table)
 
 		_, err = tx.Exec(fmt.Sprintf(sqlCreateTmpTable, copyTable))
@@ -384,7 +289,7 @@ func (c *Client) Write(samples model.Samples) error {
 		metricName, labels := metricLabelStrings(sample.Metric)
 		line := fmt.Sprintf("%v%v %v %v\n", metricName, labels, sample.Value, milliseconds)
 
-		if c.cfg.pgPrometheusLogSamples {
+		if c.cfg.s2PrometheusLogSamples {
 			fmt.Println(line)
 		}
 
@@ -459,8 +364,8 @@ func (c *Client) Write(samples model.Samples) error {
 		return err
 	}
 
-	// duration := time.Since(begin).Seconds()
-	// log.Debug("msg", "Wrote samples", "count", len(samples), "duration", duration)
+	duration := time.Since(begin).Seconds()
+	log.Debug("msg", "Wrote samples", "count", len(samples), "duration", duration)
 	return nil
 }
 
@@ -542,14 +447,14 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 			return nil, err
 		}
 
-		// log.Debug("msg", "Executed query", "query", command)
+		log.Debug("msg", "Execute READ query", "query", command)
 
 		rows, err := c.DB.Query(command)
-		fmt.Println("------command---------")
+		/*fmt.Println("------command---------")
 		fmt.Println(command)
 		fmt.Println("------error-------")
 		fmt.Println(err)
-		fmt.Println("---end of command---------")
+		fmt.Println("---end of command---------")*/
 		if err != nil {
 			return nil, err
 		}
@@ -614,7 +519,7 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 	}
 	for _, ts := range labelsToSeries {
 		resp.Results[0].Timeseries = append(resp.Results[0].Timeseries, ts)
-		if c.cfg.pgPrometheusLogSamples {
+		if c.cfg.s2PrometheusLogSamples {
 			log.Debug("timeseries", ts.String())
 		}
 	}
@@ -622,53 +527,6 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 	log.Debug("msg", "Returned response", "#timeseries", len(labelsToSeries))
 
 	return &resp, nil
-}
-
-// verifyPgPrometheus checks are the extensions and schema already setup.
-func (c *Client) verifyPgPrometheus() (bool, bool, error) {
-	installExtensions, installSchema := true, true
-
-	extCount := 1
-	extensions := "'pg_prometheus'"
-
-	if c.cfg.useTimescaleDb {
-		extCount++
-		extensions += ",'timescaledb'"
-	}
-
-	rows, err := c.DB.Query(fmt.Sprintf("SELECT DISTINCT(e.extname) FROM pg_catalog.pg_extension e WHERE e.extname IN (%s)", extensions))
-	if err != nil {
-		log.Debug("msg", "Extension check failed", "err", err)
-		return false, false, err
-	}
-
-	for extCount > 0 && rows.Next() {
-		extCount--
-	}
-
-	// If the extensions are not installed, assume the schema is missing too.
-	if extCount != 0 {
-		return installExtensions, installSchema, nil
-	}
-
-	installExtensions = false
-
-	rows.Close()
-
-	rows, err = c.DB.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 1", c.cfg.table))
-
-	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") {
-			return installExtensions, installSchema, nil
-		}
-
-		log.Debug("msg", "Schema check failed", "err", err)
-		return false, false, err
-	}
-
-	installSchema = false
-
-	return installExtensions, installSchema, nil
 }
 
 // HealthCheck implements the healtcheck interface
@@ -681,12 +539,6 @@ func (c *Client) HealthCheck() error {
 
 	rows.Close()
 	return nil
-}
-
-func toTimestamp(milliseconds int64) time.Time {
-	sec := milliseconds / 1000
-	nsec := (milliseconds - (sec * 1000)) * 1000000
-	return time.Unix(sec, nsec).UTC()
 }
 
 func (c *Client) buildQuery(q *prompb.Query) (string, error) {
@@ -740,7 +592,7 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	equalsPredicate := ""
 
 	for key, val := range labelEqualPredicates {
-		fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
+		// fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
 		equalsPredicate += fmt.Sprintf(" AND labels::$%s = '%s'", key, val)
 	}
 

@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pgprometheus "prometheus-singlestore-adapter/pkg/singlestore"
+	s2prometheus "prometheus-singlestore-adapter/pkg/singlestore"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
@@ -46,12 +46,8 @@ type config struct {
 	remoteTimeout      time.Duration
 	listenAddr         string
 	telemetryPath      string
-	pgPrometheusConfig pgprometheus.Config
+	s2PrometheusConfig s2prometheus.Config
 	logLevel           string
-	haGroupLockID      int
-	restElection       bool
-	prometheusTimeout  time.Duration
-	electionInterval   time.Duration
 }
 
 const (
@@ -97,7 +93,6 @@ var (
 		[]string{"path"},
 	)
 	writeThroughput     = util.NewThroughputCalc(tickInterval)
-	elector             *util.Elector
 	lastRequestUnixNano = time.Now().UnixNano()
 )
 
@@ -118,12 +113,6 @@ func main() {
 	http.Handle(cfg.telemetryPath, promhttp.Handler())
 
 	writer, reader := buildClients(cfg)
-	// pgClient, ok := writer.(*pgprometheus.Client)
-	// if ok {
-	// 	elector = initElector(cfg, pgClient.DB)
-	// } else {
-	// 	log.Info("msg", "Running in read-only mode. This instance can't participate in leader election")
-	// }
 
 	http.Handle("/write", timeHandler("write", write(writer)))
 	http.Handle("/read", timeHandler("read", read(reader)))
@@ -165,17 +154,12 @@ func main() {
 func parseFlags() *config {
 	cfg := &config{}
 
-	pgprometheus.ParseFlags(&cfg.pgPrometheusConfig)
+	s2prometheus.ParseFlags(&cfg.s2PrometheusConfig)
 
 	flag.DurationVar(&cfg.remoteTimeout, "adapter-send-timeout", 30*time.Second, "The timeout to use when sending samples to the remote storage.")
 	flag.StringVar(&cfg.listenAddr, "web-listen-address", ":9201", "Address to listen on for web endpoints.")
 	flag.StringVar(&cfg.telemetryPath, "web-telemetry-path", "/metrics", "Address to listen on for web endpoints.")
 	flag.StringVar(&cfg.logLevel, "log-level", "debug", "The log level to use [ \"error\", \"warn\", \"info\", \"debug\" ].")
-	flag.IntVar(&cfg.haGroupLockID, "leader-election-pg-advisory-lock-id", 0, "Unique advisory lock id per adapter high-availability group. Set it if you want to use leader election implementation based on PostgreSQL advisory lock.")
-	flag.DurationVar(&cfg.prometheusTimeout, "leader-election-pg-advisory-lock-prometheus-timeout", -1, "Adapter will resign if there are no requests from Prometheus within a given timeout (0 means no timeout). "+
-		"Note: make sure that only one Prometheus instance talks to the adapter. Timeout value should be co-related with Prometheus scrape interval but add enough `slack` to prevent random flips.")
-	flag.BoolVar(&cfg.restElection, "leader-election-rest", false, "Enable REST interface for the leader election")
-	flag.DurationVar(&cfg.electionInterval, "scheduled-election-interval", 5*time.Second, "Interval at which scheduled election runs. This is used to select a leader and confirm that we still holding the advisory lock.")
 
 	envy.Parse("TS_PROM")
 	flag.Parse()
@@ -206,50 +190,12 @@ type reader interface {
 }
 
 func buildClients(cfg *config) (writer, reader) {
-	pgClient := pgprometheus.NewClient(&cfg.pgPrometheusConfig)
-	if pgClient.ReadOnly() {
-		return &noOpWriter{}, pgClient
+	s2Client := s2prometheus.NewClient(&cfg.s2PrometheusConfig)
+	if s2Client.ReadOnly() {
+		return &noOpWriter{}, s2Client
 	}
-	return pgClient, pgClient
+	return s2Client, s2Client
 }
-
-// func initElector(cfg *config, db *sql.DB) *util.Elector {
-// 	if cfg.restElection && cfg.haGroupLockID != 0 {
-// 		log.Error("msg", "Use either REST or PgAdvisoryLock for the leader election")
-// 		os.Exit(1)
-// 	}
-// 	if cfg.restElection {
-// 		return util.NewElector(util.NewRestElection())
-// 	}
-// 	if cfg.haGroupLockID == 0 {
-// 		log.Warn("msg", "No adapter leader election. Group lock id is not set. Possible duplicate write load if running adapter in high-availability mode")
-// 		return nil
-// 	}
-// 	if cfg.prometheusTimeout == -1 {
-// 		log.Error("msg", "Prometheus timeout configuration must be set when using PG advisory lock")
-// 		os.Exit(1)
-// 	}
-// 	lock, err := util.NewPgAdvisoryLock(cfg.haGroupLockID, db)
-// 	if err != nil {
-// 		log.Error("msg", "Error creating advisory lock", "haGroupLockId", cfg.haGroupLockID, "err", err)
-// 		os.Exit(1)
-// 	}
-// 	scheduledElector := util.NewScheduledElector(lock, cfg.electionInterval)
-// 	log.Info("msg", "Initialized leader election based on PostgreSQL advisory lock")
-// 	if cfg.prometheusTimeout != 0 {
-// 		go func() {
-// 			ticker := time.NewTicker(promLivenessCheck)
-// 			for {
-// 				select {
-// 				case <-ticker.C:
-// 					lastReq := atomic.LoadInt64(&lastRequestUnixNano)
-// 					scheduledElector.PrometheusLivenessCheck(lastReq, cfg.prometheusTimeout)
-// 				}
-// 			}
-// 		}()
-// 	}
-// 	return &scheduledElector.Elector
-// }
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +236,7 @@ func write(writer writer) http.Handler {
 
 		select {
 		case d := <-writeThroughput.Values:
-			log.Info("msg", "Samples write throughput", "samples/sec", d)
+			log.Debug("msg", "Samples write throughput", "samples/sec", d)
 		default:
 		}
 	})
@@ -327,10 +273,10 @@ func read(reader reader) http.Handler {
 			return
 		}
 
-		fmt.Println("-------READ QUERY-----")
+		//log.Debug("-------READ QUERY-----")
 		var resp *prompb.ReadResponse
 		resp, err = reader.Read(&req)
-		fmt.Println("--------------------")
+		//log.Debug("--------------------")
 		if err != nil {
 			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -387,21 +333,7 @@ func protoToSamples(req *prompb.WriteRequest) model.Samples {
 func sendSamples(w writer, samples model.Samples) error {
 	atomic.StoreInt64(&lastRequestUnixNano, time.Now().UnixNano())
 	begin := time.Now()
-	shouldWrite := true
-	var err error
-	// if elector != nil {
-	// 	shouldWrite, err = elector.IsLeader()
-	// 	if err != nil {
-	// 		log.Error("msg", "IsLeader check failed", "err", err)
-	// 		return err
-	// 	}
-	// }
-	if shouldWrite {
-		err = w.Write(samples)
-	} else {
-		log.Debug("msg", fmt.Sprintf("Election id %v: Instance is not a leader. Can't write data", elector.ID()))
-		return nil
-	}
+	err := w.Write(samples)
 	duration := time.Since(begin).Seconds()
 	if err != nil {
 		failedSamples.WithLabelValues(w.Name()).Add(float64(len(samples)))

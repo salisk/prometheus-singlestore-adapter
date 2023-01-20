@@ -14,7 +14,7 @@ spec:
         run: prometheus-singlestore-adapter
     spec:
       containers:
-        - args: ["--pg-prometheus-log-samples=false", "--pg-port=3306", "--pg-user=admin", "--pg-database=metricsdb"]
+        - args: ["--pg-prometheus-log-samples=false", "--pg-port=3306", "--pg-user=admin", "--pg-database=metricsdb", "--log-level=debug"]
           env:
             - name: TS_PROM_LOG_LEVEL
               value: "debug"
