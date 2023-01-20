@@ -19,30 +19,27 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"prometheus-singlestore-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/util"
 	"sync/atomic"
 	"time"
 
-	"prometheus-singlestore-adapter/pkg/log"
-
 	pgprometheus "prometheus-singlestore-adapter/pkg/singlestore"
-
-	"prometheus-singlestore-adapter/pkg/util"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/jamiealquiza/envy"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
-
-	"fmt"
+	// "github.com/prometheus/prometheus/promql"
 )
 
 type config struct {
@@ -129,14 +126,36 @@ func main() {
 	// }
 
 	http.Handle("/write", timeHandler("write", write(writer)))
-	// http.Handle("/read", timeHandler("read", read(reader)))
+	http.Handle("/read", timeHandler("read", read(reader)))
 	http.Handle("/healthz", health(reader))
+
+	// engine := promql.NewEngine(nil)
+	// http.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
+	// 	query := r.URL.Query().Get("query")
+	// 	if query == "" {
+	// 		http.Error(w, "query parameter is required", http.StatusBadRequest)
+	// 		return
+	// 	}
+	//        q, err := engine.NewRangeQuery()
+	//
+	//
+	// 	expr, err := engine.Parse(query)
+	// 	if err != nil {
+	// 		http.Error(w, fmt.Sprintf("Error parsing query: %s", err), http.StatusBadRequest)
+	// 		return
+	// 	}
+	//
+	// 	// Execute the parsed query against your metrics.
+	// 	// ...
+	//
+	// 	// Return the result of the query to the client.
+	// 	// ...
+	// })
 
 	log.Info("msg", "Starting up...")
 	log.Info("msg", "Listening", "addr", cfg.listenAddr)
 
 	err := http.ListenAndServe(cfg.listenAddr, nil)
-
 	if err != nil {
 		log.Error("msg", "Listen failure", "err", err)
 		os.Exit(1)
@@ -144,7 +163,6 @@ func main() {
 }
 
 func parseFlags() *config {
-
 	cfg := &config{}
 
 	pgprometheus.ParseFlags(&cfg.pgPrometheusConfig)
@@ -235,6 +253,7 @@ func buildClients(cfg *config) (writer, reader) {
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
@@ -286,53 +305,55 @@ func getCounterValue(counter prometheus.Counter) float64 {
 	return dtoMetric.GetCounter().GetValue()
 }
 
-// func read(reader reader) http.Handler {
-// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		compressed, err := ioutil.ReadAll(r.Body)
-// 		if err != nil {
-// 			log.Error("msg", "Read error", "err", err.Error())
-// 			http.Error(w, err.Error(), http.StatusInternalServerError)
-// 			return
-// 		}
+func read(reader reader) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		compressed, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			log.Error("msg", "Read error", "err", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-// 		reqBuf, err := snappy.Decode(nil, compressed)
-// 		if err != nil {
-// 			log.Error("msg", "Decode error", "err", err.Error())
-// 			http.Error(w, err.Error(), http.StatusBadRequest)
-// 			return
-// 		}
+		reqBuf, err := snappy.Decode(nil, compressed)
+		if err != nil {
+			log.Error("msg", "Decode error", "err", err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-// 		var req prompb.ReadRequest
-// 		if err := proto.Unmarshal(reqBuf, &req); err != nil {
-// 			log.Error("msg", "Unmarshal error", "err", err.Error())
-// 			http.Error(w, err.Error(), http.StatusBadRequest)
-// 			return
-// 		}
+		var req prompb.ReadRequest
+		if err := proto.Unmarshal(reqBuf, &req); err != nil {
+			log.Error("msg", "Unmarshal error", "err", err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-// 		var resp *prompb.ReadResponse
-// 		resp, err = reader.Read(&req)
-// 		if err != nil {
-// 			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
-// 			http.Error(w, err.Error(), http.StatusInternalServerError)
-// 			return
-// 		}
+		fmt.Println("-------READ QUERY-----")
+		var resp *prompb.ReadResponse
+		resp, err = reader.Read(&req)
+		fmt.Println("--------------------")
+		if err != nil {
+			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-// 		data, err := proto.Marshal(resp)
-// 		if err != nil {
-// 			http.Error(w, err.Error(), http.StatusInternalServerError)
-// 			return
-// 		}
+		data, err := proto.Marshal(resp)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-// 		w.Header().Set("Content-Type", "application/x-protobuf")
-// 		w.Header().Set("Content-Encoding", "snappy")
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.Header().Set("Content-Encoding", "snappy")
 
-// 		compressed = snappy.Encode(nil, data)
-// 		if _, err := w.Write(compressed); err != nil {
-// 			http.Error(w, err.Error(), http.StatusInternalServerError)
-// 			return
-// 		}
-// 	})
-// }
+		compressed = snappy.Encode(nil, data)
+		if _, err := w.Write(compressed); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+}
 
 func health(reader reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

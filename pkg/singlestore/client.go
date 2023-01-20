@@ -542,9 +542,14 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 			return nil, err
 		}
 
-		log.Debug("msg", "Executed query", "query", command)
+		// log.Debug("msg", "Executed query", "query", command)
 
 		rows, err := c.DB.Query(command)
+		fmt.Println("------command---------")
+		fmt.Println(command)
+		fmt.Println("------error-------")
+		fmt.Println(err)
+		fmt.Println("---end of command---------")
 		if err != nil {
 			return nil, err
 		}
@@ -777,7 +782,7 @@ func anchorValue(str string) string {
 	return fmt.Sprintf("^%s$", str)
 }
 
-// Name identifies the client as a PostgreSQL client.
+// Name identifies the client as a SingleStore client.
 func (c Client) Name() string {
 	return "SingleStore"
 }

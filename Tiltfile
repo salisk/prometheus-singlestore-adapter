@@ -5,7 +5,7 @@ default_registry('k3d-registry.localhost:5000')
 local_resource(
     'go-compile',
     'make build',
-    deps=['cmd/*', 'pkg/*']
+    deps=['cmd/', 'pkg/']
     )
 
 docker_build_with_restart(
