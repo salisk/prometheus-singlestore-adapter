@@ -71,11 +71,11 @@ type Client struct {
 }
 
 const (
-	//sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s_tmp(sample prom_sample) ON COMMIT DELETE ROWS;"
+	// sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s_tmp(sample prom_sample) ON COMMIT DELETE ROWS;"
 	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s(time BIGINT, name TEXT, value DOUBLE, labels JSON)"
 	// sqlCopyTable      = "COPY \"%s\" FROM STDIN"
 	sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT name, labels FROM %s"
-	//sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT tmp.prom_name, tmp.prom_labels FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp LEFT JOIN %s_labels l ON tmp.prom_name=l.metric_name AND tmp.prom_labels=l.labels WHERE l.metric_name IS NULL ON CONFLICT (metric_name, labels) DO NOTHING;"
+	// sqlInsertLabels = "INSERT INTO %s_labels (metric_name, labels) SELECT tmp.prom_name, tmp.prom_labels FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp LEFT JOIN %s_labels l ON tmp.prom_name=l.metric_name AND tmp.prom_labels=l.labels WHERE l.metric_name IS NULL ON CONFLICT (metric_name, labels) DO NOTHING;"
 	sqlInsertValues = "INSERT INTO %s_values SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
 	// sqlInsertValues = "INSERT INTO %s_values SELECT tmp.prom_time, tmp.prom_value, l.id FROM (SELECT prom_time(sample), prom_value(sample), prom_name(sample), prom_labels(sample) FROM %s_tmp) tmp INNER JOIN %s_labels l on tmp.prom_name=l.metric_name AND  tmp.prom_labels=l.labels;"
 )
@@ -739,12 +739,9 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	}
 	equalsPredicate := ""
 
-	if len(labelEqualPredicates) > 0 {
-		labelsJSON, err := json.Marshal(labelEqualPredicates)
-		if err != nil {
-			return "", err
-		}
-		equalsPredicate = fmt.Sprintf(" AND labels @> '%s'", labelsJSON)
+	for key, val := range labelEqualPredicates {
+		fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
+		equalsPredicate += fmt.Sprintf(" AND labels::$%s = '%s'", key, val)
 	}
 
 	matchers = append(matchers, fmt.Sprintf("time >= '%v'", toTimestamp(q.StartTimestampMs).Format(time.RFC3339)))

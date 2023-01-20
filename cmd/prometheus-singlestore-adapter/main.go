@@ -253,7 +253,6 @@ func buildClients(cfg *config) (writer, reader) {
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
