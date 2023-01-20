@@ -708,9 +708,9 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 			case prompb.LabelMatcher_NEQ:
 				matchers = append(matchers, fmt.Sprintf("name != '%s'", escapedValue))
 			case prompb.LabelMatcher_RE:
-				matchers = append(matchers, fmt.Sprintf("name ~ '%s'", anchorValue(escapedValue)))
+				matchers = append(matchers, fmt.Sprintf("name RLIKE '%s'", anchorValue(escapedValue)))
 			case prompb.LabelMatcher_NRE:
-				matchers = append(matchers, fmt.Sprintf("name !~ '%s'", anchorValue(escapedValue)))
+				matchers = append(matchers, fmt.Sprintf("name NOT RLIKE '%s'", anchorValue(escapedValue)))
 			default:
 				return "", fmt.Errorf("unknown metric name match type %v", m.Type)
 			}
@@ -721,17 +721,17 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 					// From the PromQL docs: "Label matchers that match
 					// empty label values also select all time series that
 					// do not have the specific label set at all."
-					matchers = append(matchers, fmt.Sprintf("((labels ? '%s') = false OR (labels->>'%s' = ''))",
+					matchers = append(matchers, fmt.Sprintf("((labels::%s IS NULL) OR (labels::$%s = ''))",
 						escapedName, escapedName))
 				} else {
 					labelEqualPredicates[escapedName] = escapedValue
 				}
 			case prompb.LabelMatcher_NEQ:
-				matchers = append(matchers, fmt.Sprintf("labels->>'%s' != '%s'", escapedName, escapedValue))
+				matchers = append(matchers, fmt.Sprintf("labels::$%s != '%s'", escapedName, escapedValue))
 			case prompb.LabelMatcher_RE:
-				matchers = append(matchers, fmt.Sprintf("labels->>'%s' ~ '%s'", escapedName, anchorValue(escapedValue)))
+				matchers = append(matchers, fmt.Sprintf("labels::$%s RLIKE '%s'", escapedName, anchorValue(escapedValue)))
 			case prompb.LabelMatcher_NRE:
-				matchers = append(matchers, fmt.Sprintf("labels->>'%s' !~ '%s'", escapedName, anchorValue(escapedValue)))
+				matchers = append(matchers, fmt.Sprintf("labels::$%s NOT RLIKE '%s'", escapedName, anchorValue(escapedValue)))
 			default:
 				return "", fmt.Errorf("unknown match type %v", m.Type)
 			}
@@ -744,8 +744,8 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 		equalsPredicate += fmt.Sprintf(" AND labels::$%s = '%s'", key, val)
 	}
 
-	matchers = append(matchers, fmt.Sprintf("time >= '%v'", toTimestamp(q.StartTimestampMs).Format(time.RFC3339)))
-	matchers = append(matchers, fmt.Sprintf("time <= '%v'", toTimestamp(q.EndTimestampMs).Format(time.RFC3339)))
+	matchers = append(matchers, fmt.Sprintf("time >= %v", q.StartTimestampMs))
+	matchers = append(matchers, fmt.Sprintf("time <= %v", q.EndTimestampMs))
 
 	return fmt.Sprintf("SELECT time, name, value, labels FROM %s WHERE %s %s ORDER BY time",
 		c.cfg.table, strings.Join(matchers, " AND "), equalsPredicate), nil
