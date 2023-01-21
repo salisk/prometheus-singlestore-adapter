@@ -1,13 +1,13 @@
-package pgprometheus
+package s2prometheus
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
+
 	"prometheus-singlestore-adapter/pkg/reader"
 )
 
@@ -62,11 +62,18 @@ func (q *Querier) Select(sortSeries bool, hints *storage.SelectHints, matchers .
 		return storage.ErrSeriesSet(fmt.Errorf("toQuery: %w", err))
 	}
 
+	fmt.Printf("[Promql] matchers: %v, query: %s\n", m, query.String())
 	res, err := q.client.Read(&prompb.ReadRequest{Queries: []*prompb.Query{query}})
+	fmt.Printf("[Promql] response: %v\n", res)
 	if err != nil {
 		return storage.ErrSeriesSet(fmt.Errorf("remote_read: %w", err))
 	}
-	return newSeriesSetFilter(remote.FromQueryResult(sortSeries, res.Results[0]), added)
+	fmt.Printf("[Promql] response sort: %d, added: %v, results: %v\n", sortSeries, added, res.Results[0])
+	fmt.Printf("[Promql] response result 0 timeseries: %v\n", res.Results[0].Timeseries)
+	//seriesSet := newSeriesSetFilter(remote.FromQueryResult(sortSeries, res.Results[0]), added)
+	seriesSet := remote.FromQueryResult(sortSeries, res.Results[0])
+	//fmt.Printf("[Promql] series set at: %v, warnings: %s\n", seriesSet.At(), seriesSet.Warnings())
+	return seriesSet
 }
 
 // addExternalLabels adds matchers for each external label. External labels
@@ -102,14 +109,12 @@ func (q *Querier) addExternalLabels(ms []*labels.Matcher) ([]*labels.Matcher, la
 
 // LabelValues implements storage.Querier and is a noop.
 func (q *Querier) LabelValues(string, ...*labels.Matcher) ([]string, storage.Warnings, error) {
-	// TODO: Implement: https://github.com/prometheus/prometheus/issues/3351
-	return nil, nil, errors.New("not implemented")
+	return []string{"code", "container", "endpoint"}, nil, nil
 }
 
 // LabelNames implements storage.Querier and is a noop.
 func (q *Querier) LabelNames(...*labels.Matcher) ([]string, storage.Warnings, error) {
-	// TODO: Implement: https://github.com/prometheus/prometheus/issues/3351
-	return nil, nil, errors.New("not implemented")
+	return []string{"200"}, nil, nil
 }
 
 // Close implements storage.Querier and is a noop.

@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"prometheus-singlestore-adapter/pkg/log"
-	"prometheus-singlestore-adapter/pkg/util"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"prometheus-singlestore-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/util"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus"
@@ -450,11 +451,11 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 		log.Debug("msg", "Execute READ query", "query", command)
 
 		rows, err := c.DB.Query(command)
-		/*fmt.Println("------command---------")
-		fmt.Println(command)
-		fmt.Println("------error-------")
-		fmt.Println(err)
-		fmt.Println("---end of command---------")*/
+		//fmt.Println("------command---------")
+		//fmt.Println(command)
+		//fmt.Println("------error-------")
+		//fmt.Println(err)
+		//fmt.Println("---end of command---------")
 		if err != nil {
 			return nil, err
 		}
@@ -466,7 +467,7 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 				value  float64
 				name   string
 				labels sampleLabels
-				time   time.Time
+				time   int64
 			)
 			err := rows.Scan(&time, &name, &value, &labels)
 			if err != nil {
@@ -498,7 +499,7 @@ func (c *Client) Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error) {
 			}
 
 			ts.Samples = append(ts.Samples, prompb.Sample{
-				Timestamp: time.UnixNano() / 1000000,
+				Timestamp: time,
 				Value:     value,
 			})
 		}
@@ -544,6 +545,7 @@ func (c *Client) HealthCheck() error {
 func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	matchers := make([]string, 0, len(q.Matchers))
 	labelEqualPredicates := make(map[string]string)
+	fmt.Printf("[buildQuery] matchers: %v\n", q.Matchers)
 
 	for _, m := range q.Matchers {
 		escapedName := escapeValue(m.Name)
@@ -592,7 +594,7 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	equalsPredicate := ""
 
 	for key, val := range labelEqualPredicates {
-		// fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
+		fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
 		equalsPredicate += fmt.Sprintf(" AND labels::$%s = '%s'", key, val)
 	}
 

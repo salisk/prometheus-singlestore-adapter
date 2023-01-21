@@ -18,26 +18,28 @@ package main
 // documentation/examples/remote_storage/remote_storage_adapter/main.go
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/promql"
 	"io/ioutil"
 	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"prometheus-singlestore-adapter/pkg/log"
-	"prometheus-singlestore-adapter/pkg/reader"
-	"prometheus-singlestore-adapter/pkg/util"
 	"strconv"
 	"sync/atomic"
 	"time"
 
-	s2prometheus "prometheus-singlestore-adapter/pkg/singlestore"
-	"github.com/prometheus/prometheus/model/labels"
+	"prometheus-singlestore-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/reader"
+	"prometheus-singlestore-adapter/pkg/util"
 
+	"github.com/prometheus/prometheus/model/timestamp"
+
+	s2prometheus "prometheus-singlestore-adapter/pkg/singlestore"
+
+	"github.com/NYTimes/gziphandler"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/jamiealquiza/envy"
@@ -45,8 +47,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/promql"
+	//"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/storage"
 )
 
 type config struct {
@@ -125,11 +129,11 @@ func main() {
 
 	http.Handle(cfg.telemetryPath, promhttp.Handler())
 
-	writer, reader := buildClients(cfg)
+	writer, readerClient := buildClients(cfg)
 
 	http.Handle("/write", timeHandler("write", write(writer)))
-	http.Handle("/read", timeHandler("read", read(reader)))
-	http.Handle("/healthz", health(reader))
+	http.Handle("/read", timeHandler("read", read(readerClient)))
+	http.Handle("/healthz", health(readerClient))
 
 	engineOpts := promql.EngineOpts{
 		Logger:                   log.GetLogger(),
@@ -141,9 +145,41 @@ func main() {
 	}
 
 	engine := promql.NewEngine(engineOpts)
-	querier := s2prometheus.NewQuerier(0, 0, reader, labels.EmptyLabels(), []*labels.Matcher{})
+	querier := s2prometheus.NewQuerier(
+		timestamp.FromTime(time.Now().Add(-time.Hour*600)),
+		timestamp.FromTime(time.Now().Add(time.Hour*600)),
+		readerClient,
+		labels.Labels{labels.Label{
+			Name:  "handler",
+			Value: "/",
+		}},
+		[]*labels.Matcher{},
+	)
+	http.HandleFunc("/api/v1/query", Query(queryZip(engine, querier)))
 
-	http.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
+	log.Info("msg", "Starting up...")
+	log.Info("msg", "Listening", "addr", cfg.listenAddr)
+
+	err := http.ListenAndServe(cfg.listenAddr, nil)
+	if err != nil {
+		log.Error("msg", "Listen failure", "err", err)
+		os.Exit(1)
+	}
+}
+
+func Query(handler http.Handler) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		handler.ServeHTTP(responseWriter, request)
+	}
+}
+
+func queryZip(engine *promql.Engine, querier s2prometheus.Querier) http.Handler {
+	hf := queryHandler(engine, querier)
+	return gziphandler.GzipHandler(hf)
+}
+
+func queryHandler(engine *promql.Engine, querier s2prometheus.Querier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("query")
 		if query == "" {
 			http.Error(w, "query parameter is required", http.StatusBadRequest)
@@ -159,19 +195,21 @@ func main() {
 			return
 		}
 
-		ctx := r.Context()
-		if to := r.FormValue("timeout"); to != "" {
-			var cancel context.CancelFunc
-			timeout, err := parseDuration(to)
-			if err != nil {
-				log.Error("msg", "Query error", "err", err.Error())
-				http.Error(w, "query parameter is required", http.StatusBadRequest)
-				return
-			}
+		//ctx := r.Context()
+		//if to := r.FormValue("timeout"); to != "" {
+		//	var cancel context.CancelFunc
+		//	timeout, err := parseDuration(to)
+		//	if err != nil {
+		//		log.Error("msg", "Query error", "err", err.Error())
+		//		http.Error(w, "query parameter is required", http.StatusBadRequest)
+		//		return
+		//	}
+		//
+		//	ctx, cancel = context.WithTimeout(ctx, timeout)
+		//	defer cancel()
+		//}
 
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
+		fmt.Printf("[Promql] query: %s\n", query)
 
 		expr, err := engine.NewInstantQuery(&querier, &promql.QueryOpts{}, query, ts)
 		if err != nil {
@@ -179,7 +217,13 @@ func main() {
 			return
 		}
 
+		fmt.Printf("[Promql] expr: %s\n", expr.String())
+
 		res := expr.Exec(r.Context())
+		fmt.Printf("[Promql] result: %v, warnings: %v, err: %v \n", res.Value, res.Warnings, res.Err)
+		val, er := res.Vector()
+		fmt.Printf("[Promql] vector val: %v, err: %v\n", val, er)
+		fmt.Printf("[Promql] result query string: %s\n", res.String())
 		if res.Err != nil {
 			log.Error("msg", res.Err, "endpoint", "query")
 			switch res.Err.(type) {
@@ -197,15 +241,6 @@ func main() {
 			return
 		}
 		respondQuery(w, res, res.Warnings)
-	})
-
-	log.Info("msg", "Starting up...")
-	log.Info("msg", "Listening", "addr", cfg.listenAddr)
-
-	err := http.ListenAndServe(cfg.listenAddr, nil)
-	if err != nil {
-		log.Error("msg", "Listen failure", "err", err)
-		os.Exit(1)
 	}
 }
 
@@ -405,6 +440,7 @@ func getCounterValue(counter prometheus.Counter) float64 {
 
 func read(reader reader.Reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
@@ -426,10 +462,10 @@ func read(reader reader.Reader) http.Handler {
 			return
 		}
 
-		//log.Debug("-------READ QUERY-----")
+		// log.Debug("-------READ QUERY-----")
 		var resp *prompb.ReadResponse
 		resp, err = reader.Read(&req)
-		//log.Debug("--------------------")
+		// log.Debug("--------------------")
 		if err != nil {
 			log.Warn("msg", "Error executing query", "query", req, "storage", reader.Name(), "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)

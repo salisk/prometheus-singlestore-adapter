@@ -145,6 +145,7 @@ func writeExemplarSeriesLabels(out *errorWrapper, seriesLbls labels.Labels) {
 }
 
 func marshalVectorData(out *errorWrapper, data promql.Vector) {
+	fmt.Printf("[VectorData] %v\n", data)
 	out.WriteStrings(`{"resultType":"`, string(parser.ValueTypeVector), `","result":[`)
 	{
 		floatLen := 0
