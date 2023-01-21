@@ -18,16 +18,24 @@ package main
 // documentation/examples/remote_storage/remote_storage_adapter/main.go
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/prometheus/prometheus/storage"
 	"io/ioutil"
+	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"prometheus-singlestore-adapter/pkg/log"
+	"prometheus-singlestore-adapter/pkg/reader"
 	"prometheus-singlestore-adapter/pkg/util"
+	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/prometheus/model/labels"
 
 	pgprometheus "prometheus-singlestore-adapter/pkg/singlestore"
 
@@ -39,7 +47,7 @@ import (
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
-	// "github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql"
 )
 
 type config struct {
@@ -99,6 +107,12 @@ var (
 	writeThroughput     = util.NewThroughputCalc(tickInterval)
 	elector             *util.Elector
 	lastRequestUnixNano = time.Now().UnixNano()
+
+	minTime = time.Unix(math.MinInt64/1000+62135596801, 0).UTC()
+	maxTime = time.Unix(math.MaxInt64/1000-62135596801, 999999999).UTC()
+
+	minTimeFormatted = minTime.Format(time.RFC3339Nano)
+	maxTimeFormatted = maxTime.Format(time.RFC3339Nano)
 )
 
 func init() {
@@ -129,28 +143,73 @@ func main() {
 	http.Handle("/read", timeHandler("read", read(reader)))
 	http.Handle("/healthz", health(reader))
 
-	// engine := promql.NewEngine(nil)
-	// http.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
-	// 	query := r.URL.Query().Get("query")
-	// 	if query == "" {
-	// 		http.Error(w, "query parameter is required", http.StatusBadRequest)
-	// 		return
-	// 	}
-	//        q, err := engine.NewRangeQuery()
-	//
-	//
-	// 	expr, err := engine.Parse(query)
-	// 	if err != nil {
-	// 		http.Error(w, fmt.Sprintf("Error parsing query: %s", err), http.StatusBadRequest)
-	// 		return
-	// 	}
-	//
-	// 	// Execute the parsed query against your metrics.
-	// 	// ...
-	//
-	// 	// Return the result of the query to the client.
-	// 	// ...
-	// })
+	engineOpts := promql.EngineOpts{
+		Logger:                   log.GetLogger(),
+		Reg:                      prometheus.NewRegistry(),
+		MaxSamples:               5000000,
+		Timeout:                  time.Minute * 2,
+		LookbackDelta:            time.Minute * 5,
+		NoStepSubqueryIntervalFn: func(int64) int64 { return durationMilliseconds(time.Minute) },
+	}
+
+	engine := promql.NewEngine(engineOpts)
+	querier := pgprometheus.NewQuerier(0, 0, reader, labels.EmptyLabels(), []*labels.Matcher{})
+
+	http.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		if query == "" {
+			http.Error(w, "query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		var ts time.Time
+		var err error
+		ts, err = parseTimeParam(r, "time", time.Now())
+		if err != nil {
+			log.Error("msg", "Query error", "reason", err.Error())
+			http.Error(w, "query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		if to := r.FormValue("timeout"); to != "" {
+			var cancel context.CancelFunc
+			timeout, err := parseDuration(to)
+			if err != nil {
+				log.Error("msg", "Query error", "err", err.Error())
+				http.Error(w, "query parameter is required", http.StatusBadRequest)
+				return
+			}
+
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		expr, err := engine.NewInstantQuery(&querier, &promql.QueryOpts{}, query, ts)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error parsing query: %s", err), http.StatusBadRequest)
+			return
+		}
+
+		res := expr.Exec(r.Context())
+		if res.Err != nil {
+			log.Error("msg", res.Err, "endpoint", "query")
+			switch res.Err.(type) {
+			case promql.ErrQueryCanceled:
+				respondError(w, http.StatusServiceUnavailable, res.Err, "canceled")
+				return
+			case promql.ErrQueryTimeout:
+				respondError(w, http.StatusServiceUnavailable, res.Err, "timeout")
+				return
+			case promql.ErrStorage:
+				respondError(w, http.StatusInternalServerError, res.Err, "internal")
+				return
+			}
+			respondError(w, http.StatusUnprocessableEntity, res.Err, "execution")
+			return
+		}
+		respondQuery(w, res, res.Warnings)
+	})
 
 	log.Info("msg", "Starting up...")
 	log.Info("msg", "Listening", "addr", cfg.listenAddr)
@@ -160,6 +219,106 @@ func main() {
 		log.Error("msg", "Listen failure", "err", err)
 		os.Exit(1)
 	}
+}
+
+func respondError(w http.ResponseWriter, status int, err error, errType string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	b, err := json.Marshal(&errResponse{
+		Status:    "error",
+		ErrorType: errType,
+		Error:     err.Error(),
+	})
+	if err != nil {
+		log.Error("msg", "error marshalling json error", "err", err)
+	}
+	if n, err := w.Write(b); err != nil {
+		log.Error("msg", "error writing response", "bytesWritten", n, "err", err)
+	}
+}
+
+func respondQuery(w http.ResponseWriter, res *promql.Result, warnings storage.Warnings) {
+	setResponseHeaders(w, res, false, warnings)
+	switch resVal := res.Value.(type) {
+	case promql.Vector:
+		warnings := make([]string, 0, len(res.Warnings))
+		for _, warn := range res.Warnings {
+			warnings = append(warnings, warn.Error())
+		}
+		_ = marshalVectorResponse(w, resVal, warnings)
+	case promql.Matrix:
+		warnings := make([]string, 0, len(res.Warnings))
+		for _, warn := range res.Warnings {
+			warnings = append(warnings, warn.Error())
+		}
+		_ = marshalMatrixResponse(w, resVal, warnings)
+	default:
+		resp := &response{
+			Status: "success",
+			Data: &queryData{
+				ResultType: res.Value.Type(),
+				Result:     res.Value,
+			},
+		}
+		for _, warn := range res.Warnings {
+			resp.Warnings = append(resp.Warnings, warn.Error())
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func durationMilliseconds(d time.Duration) int64 {
+	return int64(d / (time.Millisecond / time.Nanosecond))
+}
+
+func parseDuration(s string) (time.Duration, error) {
+	if d, err := strconv.ParseFloat(s, 64); err == nil {
+		ts := d * float64(time.Second)
+		if ts > float64(math.MaxInt64) || ts < float64(math.MinInt64) {
+			return 0, fmt.Errorf("cannot parse %q to a valid duration. It overflows int64", s)
+		}
+		return time.Duration(ts), nil
+	}
+	if d, err := model.ParseDuration(s); err == nil {
+		return time.Duration(d), nil
+	}
+	return 0, fmt.Errorf("cannot parse %q to a valid duration", s)
+}
+
+func parseTimeParam(r *http.Request, paramName string, defaultValue time.Time) (time.Time, error) {
+	val := r.FormValue(paramName)
+	if val == "" {
+		return defaultValue, nil
+	}
+	result, err := parseTime(val)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("Invalid time value for '%s': %w", paramName, err)
+	}
+	return result, nil
+}
+
+func parseTime(s string) (time.Time, error) {
+	if t, err := strconv.ParseFloat(s, 64); err == nil {
+		s, ns := math.Modf(t)
+		ns = math.Round(ns*1000) / 1000
+		return time.Unix(int64(s), int64(ns*float64(time.Second))).UTC(), nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+
+	// Stdlib's time parser can only handle 4 digit years. As a workaround until
+	// that is fixed we want to at least support our own boundary times.
+	// Context: https://github.com/prometheus/client_golang/issues/614
+	// Upstream issue: https://github.com/golang/go/issues/20555
+	switch s {
+	case minTimeFormatted:
+		return minTime, nil
+	case maxTimeFormatted:
+		return maxTime, nil
+	}
+	return time.Time{}, fmt.Errorf("cannot parse %q to a valid timestamp", s)
 }
 
 func parseFlags() *config {
@@ -199,13 +358,7 @@ func (no *noOpWriter) Name() string {
 	return "noopWriter"
 }
 
-type reader interface {
-	Read(req *prompb.ReadRequest) (*prompb.ReadResponse, error)
-	Name() string
-	HealthCheck() error
-}
-
-func buildClients(cfg *config) (writer, reader) {
+func buildClients(cfg *config) (writer, reader.Reader) {
 	pgClient := pgprometheus.NewClient(&cfg.pgPrometheusConfig)
 	if pgClient.ReadOnly() {
 		return &noOpWriter{}, pgClient
@@ -253,6 +406,7 @@ func buildClients(cfg *config) (writer, reader) {
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
@@ -304,7 +458,7 @@ func getCounterValue(counter prometheus.Counter) float64 {
 	return dtoMetric.GetCounter().GetValue()
 }
 
-func read(reader reader) http.Handler {
+func read(reader reader.Reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -354,7 +508,7 @@ func read(reader reader) http.Handler {
 	})
 }
 
-func health(reader reader) http.Handler {
+func health(reader reader.Reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := reader.HealthCheck()
 		if err != nil {

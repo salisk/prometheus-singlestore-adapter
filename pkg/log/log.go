@@ -6,10 +6,8 @@ import (
 	"github.com/prometheus/common/promlog"
 )
 
-var (
-	// Application wide logger
-	logger log.Logger
-)
+// Application wide logger
+var logger log.Logger
 
 func Init(logLevel string) {
 	allowedLevel := promlog.AllowedLevel{}
@@ -37,4 +35,8 @@ func Warn(keyvals ...interface{}) {
 
 func Error(keyvals ...interface{}) {
 	level.Error(logger).Log(keyvals...)
+}
+
+func GetLogger() log.Logger {
+	return logger
 }
