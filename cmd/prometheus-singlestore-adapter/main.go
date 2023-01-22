@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	promEngine "prometheus-singlestore-adapter/pkg/engine"
 	"prometheus-singlestore-adapter/pkg/log"
 	"prometheus-singlestore-adapter/pkg/reader"
 	"prometheus-singlestore-adapter/pkg/util"
@@ -49,7 +50,6 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
-	//"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
 )
 
@@ -135,7 +135,7 @@ func main() {
 	http.Handle("/read", timeHandler("read", read(readerClient)))
 	http.Handle("/healthz", health(readerClient))
 
-	engineOpts := promql.EngineOpts{
+	engineOpts := promEngine.EngineOpts{
 		Logger:                   log.GetLogger(),
 		Reg:                      prometheus.NewRegistry(),
 		MaxSamples:               5000000,
@@ -144,7 +144,7 @@ func main() {
 		NoStepSubqueryIntervalFn: func(int64) int64 { return durationMilliseconds(time.Minute) },
 	}
 
-	engine := promql.NewEngine(engineOpts)
+	engine := promEngine.NewEngine(engineOpts)
 	querier := s2prometheus.NewQuerier(
 		timestamp.FromTime(time.Now().Add(-time.Hour*600)),
 		timestamp.FromTime(time.Now().Add(time.Hour*600)),
@@ -173,12 +173,12 @@ func Query(handler http.Handler) http.HandlerFunc {
 	}
 }
 
-func queryZip(engine *promql.Engine, querier s2prometheus.Querier) http.Handler {
+func queryZip(engine *promEngine.Engine, querier s2prometheus.Querier) http.Handler {
 	hf := queryHandler(engine, querier)
 	return gziphandler.GzipHandler(hf)
 }
 
-func queryHandler(engine *promql.Engine, querier s2prometheus.Querier) http.HandlerFunc {
+func queryHandler(engine *promEngine.Engine, querier s2prometheus.Querier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("query")
 		if query == "" {
@@ -209,9 +209,9 @@ func queryHandler(engine *promql.Engine, querier s2prometheus.Querier) http.Hand
 		//	defer cancel()
 		//}
 
-		fmt.Printf("[Promql] query: %s\n", query)
+		fmt.Printf("[Promql] ts: %s, query: %s\n", ts, query)
 
-		expr, err := engine.NewInstantQuery(&querier, &promql.QueryOpts{}, query, ts)
+		expr, err := engine.NewInstantQuery(querier, &promEngine.QueryOpts{}, query, ts)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error parsing query: %s", err), http.StatusBadRequest)
 			return

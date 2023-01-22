@@ -6,6 +6,8 @@ package main
 
 import (
 	"fmt"
+	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/storage"
 	"io"
 	"math"
@@ -14,8 +16,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/promql"
-	"github.com/prometheus/prometheus/promql/parser"
 )
 
 func marshalVectorResponse(writer io.Writer, data promql.Vector, warnings []string) error {

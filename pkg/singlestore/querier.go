@@ -3,6 +3,7 @@ package s2prometheus
 import (
 	"context"
 	"fmt"
+
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
