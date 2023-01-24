@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	promql "github.com/prometheus/prometheus/promql"
 	"math"
 	"reflect"
 	"runtime"
@@ -27,6 +26,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	promql "github.com/prometheus/prometheus/promql"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -914,7 +915,7 @@ func checkAndExpandSeriesSet(ctx context.Context, expr parser.Expr) (storage.War
 			return nil, nil
 		}
 		series, ws, err := expandSeriesSet(ctx, e.UnexpandedSeriesSet)
-		fmt.Printf("[Engine] expanded series 0: %v, ws: %v, err: %v\n", series[0], ws, err)
+		// fmt.Printf("[Engine] expanded series 0: %v, ws: %v, err: %v\n", series[0], ws, err)
 		e.Series = series
 		return ws, err
 	}

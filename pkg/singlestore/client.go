@@ -64,9 +64,9 @@ type Client struct {
 }
 
 const (
-	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s(time BIGINT, name TEXT, value DOUBLE, labels JSON)"
+	sqlCreateTmpTable = "CREATE TEMPORARY TABLE IF NOT EXISTS %s(time BIGINT, name TEXT NOT NULL, value DOUBLE, labels JSON)"
 	sqlInsertLabels   = "INSERT INTO %s_labels (metric_name, labels) SELECT name, labels FROM %s"
-	sqlInsertValues   = "INSERT INTO %s_values SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
+	sqlInsertValues   = "INSERT INTO %s_values (time, value, labels_id) SELECT tmp.time, tmp.value, l.id FROM %s as tmp INNER JOIN %s_labels AS l on tmp.name=l.metric_name AND tmp.labels=l.labels"
 )
 
 var createTmpTableStmt *sql.Stmt
@@ -167,12 +167,12 @@ func (c *Client) setupS2Prometheus() error {
 	defer tx.Rollback()
 
 	if c.cfg.s2PrometheusNormalize {
-		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_values(time BIGINT, value DOUBLE, labels_id INTEGER)", c.cfg.table))
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_values(time BIGINT, value DOUBLE, labels_id BIGINT)", c.cfg.table))
 		if err != nil {
 			return err
 		}
 
-		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_labels(id INTEGER NOT NULL AUTO_INCREMENT, metric_name TEXT, labels JSON, primary key (id))", c.cfg.table))
+		_, err = c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_labels(id BIGINT NOT NULL AUTO_INCREMENT, metric_name TEXT NOT NULL, labels JSON, primary key (id))", c.cfg.table))
 		if err != nil {
 			return err
 		}
@@ -187,7 +187,7 @@ func (c *Client) setupS2Prometheus() error {
 			return err
 		}
 	} else {
-		_, err := c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_samples(time BIGINT, name TEXT, value DOUBLE, labels JSON)", c.cfg.table))
+		_, err := c.DB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s_samples(time BIGINT, name TEXT NOT NULL, value DOUBLE, labels JSON)", c.cfg.table))
 		if err != nil {
 			return err
 		}
@@ -545,7 +545,7 @@ func (c *Client) HealthCheck() error {
 func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	matchers := make([]string, 0, len(q.Matchers))
 	labelEqualPredicates := make(map[string]string)
-	fmt.Printf("[buildQuery] matchers: %v\n", q.Matchers)
+	// fmt.Printf("[buildQuery] matchers: %v\n", q.Matchers)
 
 	for _, m := range q.Matchers {
 		escapedName := escapeValue(m.Name)
@@ -594,8 +594,8 @@ func (c *Client) buildQuery(q *prompb.Query) (string, error) {
 	equalsPredicate := ""
 
 	for key, val := range labelEqualPredicates {
-		fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
-		equalsPredicate += fmt.Sprintf(" AND labels::$%s = '%s'", key, val)
+		// fmt.Printf("[labelEqualPredicates] key: %s, value: %s\n", key, val)
+		equalsPredicate += fmt.Sprintf(" AND labels::$`%s` = '%s'", key, val)
 	}
 
 	matchers = append(matchers, fmt.Sprintf("time >= %v", q.StartTimestampMs))

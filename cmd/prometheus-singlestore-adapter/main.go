@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/prometheus/prometheus/promql"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -30,6 +29,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/prometheus/promql"
 
 	promEngine "prometheus-singlestore-adapter/pkg/engine"
 	"prometheus-singlestore-adapter/pkg/log"
@@ -386,7 +387,6 @@ func buildClients(cfg *config) (writer, reader.Reader) {
 
 func write(writer writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
@@ -440,7 +440,6 @@ func getCounterValue(counter prometheus.Counter) float64 {
 
 func read(reader reader.Reader) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		return
 		compressed, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Error("msg", "Read error", "err", err.Error())
